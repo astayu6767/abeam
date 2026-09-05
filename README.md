@@ -20,7 +20,9 @@ server:
   responses.
 
 The manager uses `azalea` by default. `mineflayer` remains available only
-when an operator explicitly sends `"engine": "mineflayer"`. The older
+when an operator explicitly sends `"engine": "mineflayer"`. A small responsive
+control dashboard is served at `/` and `/dashboard`; it supports account login,
+bot creation, status, logs, console chat, start/stop and deletion. The older
 `/api/slots` path remains available for the repository's external
 `abeam.exe`/WebSocket workflow.
 

@@ -75,6 +75,7 @@ import {
 } from './bots/manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, 'public');
 const app = express();
 const server = http.createServer(app);
 
@@ -85,8 +86,15 @@ function isAdmin(user) {
 app.use(cors({ origin: config.appUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(PUBLIC_DIR));
 app.set('trust proxy', 1);
+
+// The backend repository also serves its small dashboard. Keep both the root
+// URL and /dashboard usable on Railway instead of returning Express' default
+// "Cannot GET" response.
+app.get(['/', '/dashboard', '/dashboard/'], (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
 
 // Railway and uptime monitors use this endpoint; it intentionally does not
 // touch billing, Minecraft services, or the JSON store.

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0d13" />
+    <title>Abeam — bot control plane</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/dashboard" aria-label="Abeam dashboard">
+          <span class="brand-mark">A</span>
+          <span>
+            <strong>abeam</strong>
+            <small>bot control plane</small>
+          </span>
+        </a>
+        <div class="topbar-actions">
+          <span id="connection-pill" class="connection-pill"><i></i> checking</span>
+          <button id="logout-button" class="button button-ghost hidden" type="button">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="auth-view" class="auth-layout">
+          <div class="hero-copy">
+            <p class="eyebrow">AZALEA POWERED / RAILWAY READY</p>
+            <h1>Keep your bots<br /><em>in orbit.</em></h1>
+            <p class="hero-text">
+              Create, start, monitor and control your Minecraft bots from one
+              clean control plane. The default engine is the Azalea Rust client.
+            </p>
+            <div class="hero-stats">
+              <div><strong>AZ</strong><span>Azalea runtime</span></div>
+              <div><strong>24/7</strong><span>reconnect-ready</span></div>
+              <div><strong>API</strong><span>console included</span></div>
+            </div>
+          </div>
+
+          <div class="auth-card panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">WELCOME BACK</p>
+                <h2 id="auth-title">Sign in</h2>
+              </div>
+              <span class="live-dot"></span>
+            </div>
+            <p id="auth-subtitle" class="muted">Access your bot fleet.</p>
+            <form id="auth-form" class="stack-form">
+              <label>Email<input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com" /></label>
+              <label>Password<input id="auth-password" type="password" autocomplete="current-password" minlength="6" required placeholder="••••••••" /></label>
+              <button id="auth-submit" class="button button-primary" type="submit">Sign in</button>
+            </form>
+            <button id="auth-toggle" class="text-button" type="button">Need an account? Create one</button>
+            <div class="divider"><span>or use an SSID</span></div>
+            <form id="ssid-form" class="ssid-form">
+              <input id="ssid-input" type="password" autocomplete="off" placeholder="Paste SSID" />
+              <button class="button button-secondary" type="submit">Use SSID</button>
+            </form>
+            <p class="fine-print">Never paste your Minecraft password here. Bot creation uses a Minecraft access token.</p>
+          </div>
+        </section>
+
+        <section id="dashboard-view" class="dashboard-view hidden">
+          <div class="dashboard-heading">
+            <div>
+              <p class="eyebrow">COMMAND CENTER</p>
+              <h1>Good to see you, <span id="user-name">operator</span>.</h1>
+              <p id="user-email" class="muted"></p>
+            </div>
+            <div class="heading-actions">
+              <button id="refresh-button" class="button button-secondary" type="button"><span class="refresh-icon">↻</span> Refresh</button>
+              <a class="button button-ghost" href="/api/health" target="_blank" rel="noreferrer">API health</a>
+            </div>
+          </div>
+
+          <div id="notice" class="notice hidden"></div>
+
+          <div class="metric-grid">
+            <article class="metric-card panel"><span class="metric-label">FLEET STATUS</span><strong id="metric-online">0</strong><span class="metric-foot"><i class="status-dot online"></i> online now</span></article>
+            <article class="metric-card panel"><span class="metric-label">BOT SLOTS</span><strong id="metric-slots">0 / 0</strong><span id="metric-plan" class="metric-foot">No active plan</span></article>
+            <article class="metric-card panel"><span class="metric-label">SUBSCRIPTION</span><strong id="metric-entitlement">NONE</strong><span id="metric-expires" class="metric-foot">Sign in to continue</span></article>
+          </div>
+
+          <div class="content-grid">
+            <section class="panel create-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">NEW INSTANCE</p><h2>Create a bot</h2></div>
+                <span class="engine-badge">AZALEA</span>
+              </div>
+              <p class="muted panel-intro">Each instance starts an Azalea sidecar in the Railway service.</p>
+              <form id="create-bot-form" class="stack-form">
+                <div class="form-row">
+                  <label>Bot name<input id="bot-name" maxlength="80" placeholder="lobby scout" /></label>
+                  <label>Server address<input id="bot-host" maxlength="253" required placeholder="play.example.net:25565" /></label>
+                </div>
+                <div class="form-row">
+                  <label>Minecraft access token<input id="bot-token" type="password" required placeholder="Bearer token" /></label>
+                  <label>SOCKS proxy <span class="optional">optional</span><input id="bot-proxy" placeholder="socks5://host:1080" /></label>
+                </div>
+                <div class="form-row compact-row">
+                  <label>Port <span class="optional">optional</span><input id="bot-port" type="number" min="1" max="65535" value="25565" /></label>
+                  <label>Protocol <span class="optional">Azalea uses latest vanilla</span><select id="bot-version"><option value="auto">Auto / latest</option></select></label>
+                  <label class="check-label"><input id="bot-anti-afk" type="checkbox" /> Anti-AFK</label>
+                </div>
+                <div class="form-actions"><button class="button button-primary" type="submit">Create Azalea bot <span>→</span></button><span class="fine-print">Token is never returned by the API.</span></div>
+              </form>
+            </section>
+
+            <aside class="panel account-panel">
+              <div class="panel-heading"><div><p class="eyebrow">ACCOUNT</p><h2>Entitlement</h2></div><span id="account-status" class="status-chip">—</span></div>
+              <div id="account-details" class="account-details"><p class="muted">Loading account…</p></div>
+              <div class="account-help"><strong>Need more slots?</strong><span>Use the billing panel or ask an operator to grant a plan.</span></div>
+            </aside>
+          </div>
+
+          <section class="fleet-section">
+            <div class="section-heading fleet-heading"><div><p class="eyebrow">YOUR FLEET</p><h2>Bot instances</h2></div><span id="fleet-count" class="muted">0 bots</span></div>
+            <div id="bot-list" class="bot-list"></div>
+            <div id="empty-state" class="empty-state panel"><div class="empty-icon">◎</div><h3>No bots yet</h3><p>Create your first Azalea instance above. Its status and live logs will appear here.</p></div>
+          </section>
+        </section>
+      </main>
+
+      <footer class="footer"><span>abeam control plane</span><span>Azalea runtime · secure session</span></footer>
+    </div>
+
+    <template id="bot-card-template">
+      <article class="bot-card panel">
+        <div class="bot-card-top">
+          <div class="bot-identity"><span class="bot-orb"></span><div><h3 class="bot-name"></h3><p class="bot-address"></p></div></div>
+          <span class="bot-status status-chip"></span>
+        </div>
+        <div class="bot-meta"><span class="bot-engine"></span><span class="bot-user"></span><span class="bot-created"></span></div>
+        <p class="bot-error hidden"></p>
+        <div class="bot-console hidden"><pre class="bot-logs"></pre><div class="chat-row"><input class="chat-input" placeholder="Send chat…" /><button class="button button-secondary chat-button" type="button">Send</button></div></div>
+        <div class="bot-actions"><button class="button button-secondary bot-console-button" type="button">Console</button><button class="button button-primary bot-start-button" type="button">Start</button><button class="button button-secondary bot-stop-button hidden" type="button">Stop</button><button class="icon-button bot-delete-button" type="button" title="Delete bot">×</button></div>
+      </article>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
