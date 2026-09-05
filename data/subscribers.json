@@ -1,0 +1,43 @@
+{
+  "kf2gkf5eed@crowmail.sbs": {
+    "email": "kf2gkf5eed@crowmail.sbs",
+    "planId": "storm",
+    "botSlots": 12,
+    "ssids": [
+      "fe76e0641637da2309d9a75beab7037eb856f82016f08447",
+      "bfa10f08b8035bea34511e5c8e3d37c153ee156383c3fc60"
+    ],
+    "targetServers": [
+      "as.minemen.club:25565"
+    ],
+    "since": 1788192855154,
+    "status": "active",
+    "mcTokens": [
+      {
+        "mcAccessToken": "eyJraWQiOiIwNDkxODEiLCJhbGciOiJSUzI1NiJ9.eyJ4dWlkIjoiMjUzNTQ0MzQ0NjE3NTQ1MSIsImFnZyI6IkFkdWx0Iiwic3ViIjoiZmM1YjQ0MzYtN2QyOS01MDQ5LThkMmMtZWNiOGM1NGM2M2QyIiwiYXV0aCI6IlhCT1giLCJucyI6ImRlZmF1bHQiLCJyb2xlcyI6W10sImlzcyI6ImF1dGhlbnRpY2F0aW9uIiwiZmxhZ3MiOlsibXVsdGlwbGF5ZXIiXSwicHJvZmlsZXMiOnsibWMiOiI5YzM5OGNjMi1jMTM5LTQyMDQtYTRiNy0xYWYwYWU3ODYyYmQifSwicG1pZCI6IjUzZmEwNzk1LTFiOWItNWU0NS05ZDRmLWNmOWY0NDYwYmYwOSIsInBsYXRmb3JtIjoiUENfTEFVTkNIRVIiLCJ0aWQiOiJFOTlCMCIsInBmZCI6W3sidHlwZSI6Im1jIiwiaWQiOiI5YzM5OGNjMi1jMTM5LTQyMDQtYTRiNy0xYWYwYWU3ODYyYmQiLCJuYW1lIjoiQmVhcnppbDEifV0sInhpZCI6IjI1MzU0NDM0NDYxNzU0NTEiLCJuYmYiOjE3ODgyNTgwNjIsImV4cCI6MTc4ODM0NDQ2MiwiaWF0IjoxNzg4MjU4MDYyLCJhaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwNGMxMmFlNmYifQ.BgBSNER308xL8F2TMUcoWj7k9aCabjVP5oH-LW53Y08IyH0V-efcVDViu2qgKnuX_eH38sPJfg10_NkYqqzsfV37P6bq-kwvlNtorgeeFXaf7H9WnRIIoPypshVUEV6wryOz7atMZFwFLw42615K62zHbAaV-sDpsE8EgmEcwsCBPryAvGi7Yj9LbLbFohMmUmgf8lxsEwK8Jzgli3By7nxmwy7sNOkPmMsTi6mcUbZY5tWiq5cWMawhCwZvpQklss5Hrwrgq8Uwxlo7n-TEKKF_I6XUHTNojx_iPtnK37AdxMFBVyfkNdDW1diaBRlrlXDhAjwIEoYI8mYxyPk7HA",
+        "mcUuid": "9c398cc2c1394204a4b71af0ae7862bd",
+        "mcUsername": "Bearzil1",
+        "mcName": ".",
+        "mcProxy": "",
+        "mcVersion": "auto"
+      }
+    ],
+    "configs": [
+      {
+        "persona": {
+          "discord": "lovesgrammar"
+        },
+        "ai": {
+          "enabled": false,
+          "key": ""
+        }
+      }
+    ],
+    "credits": {
+      "balance": 32,
+      "granted": 0,
+      "resetAt": 1788423307239
+    },
+    "planName": "Storm"
+  }
+}
