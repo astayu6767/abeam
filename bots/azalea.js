@@ -14,8 +14,6 @@ import readline from 'node:readline';
 
 function filterAzaleaLog(line) {
   const lower = String(line).toLowerCase();
-  // These are protocol-parser chatter from busy/proxy servers, not operator
-  // events. Keep them out of both the in-memory log and the dashboard console.
   if (lower.includes('error reading packet') || lower.includes('failed to fill whole buffer')) return true;
   return [
     'more than 1,000 items',
@@ -41,7 +39,6 @@ function findAzaleaBinary() {
     try {
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
     } catch {
-      // Try the next candidate.
     }
   }
   return null;
@@ -76,7 +73,6 @@ export class AzaleaHandle extends EventEmitter {
         this.child.stdin.write(`${JSON.stringify(payload)}\n`);
       }
     } catch {
-      // The child may be exiting.
     }
   }
 
@@ -253,14 +249,18 @@ export async function startAzaleaBot(record, runtime, callbacks = {}) {
   else child.once('spawn', writeStart);
 
   const onLine = (raw) => {
-    const line = clampLine(raw);
+    const line = String(raw ?? '').trim();
     if (!line) return;
+    if (line.length > 2_000_000) {
+      callbacks.onLog?.('error', 'Azalea JSON event exceeded the maximum size');
+      return;
+    }
     if (filterAzaleaLog(line)) return;
     let message;
     try {
       message = JSON.parse(line);
-    } catch {
-      callbacks.onLog?.('system', line);
+    } catch (error) {
+      callbacks.onLog?.('error', `invalid Azalea JSON: ${error?.message || 'parse failed'}`);
       return;
     }
 

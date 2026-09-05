@@ -1,5 +1,3 @@
-/* abeam operator UI. The browser only receives public bot metadata; Minecraft
-   tokens, proxy credentials and backend secrets stay in the API process. */
 (() => {
   'use strict';
 
@@ -21,6 +19,9 @@
     detailTimer: null,
     detailTab: 'console',
     detailView: null,
+    detailBeam: { looping: false, stage: '' },
+    detailAi: null,
+    detailActing: false,
     authMode: 'login',
   };
 
@@ -69,14 +70,17 @@
   }
 
   async function api(url, options = {}) {
-    const config = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
+    const config = { cache: 'no-store', credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
     if (options.body && typeof options.body !== 'string') {
       config.body = JSON.stringify(options.body);
       config.headers['Content-Type'] = 'application/json';
     }
     const response = await fetch(url, config);
-    let payload = null;
-    try { payload = await response.json(); } catch { payload = {}; }
+    const raw = await response.text();
+    let payload = {};
+    if (raw.trim()) {
+      try { payload = JSON.parse(raw); } catch { payload = { message: response.ok ? 'The server returned invalid JSON.' : 'The server returned an invalid error response.' }; }
+    }
     if (!response.ok) {
       const message = payload?.message || payload?.error || `Request failed (${response.status})`;
       const error = new Error(message);
@@ -463,8 +467,9 @@
   }
 
   function inventoryItem(item) {
-    if (!item) return { name: '', count: 0 };
-    return { name: item.name || item.displayName || item.type || '', count: Number(item.count || item.amount || 0) };
+    if (!item) return { name: '', displayName: '', count: 0 };
+    const name = item.name || item.displayName || item.type || '';
+    return { name, displayName: item.displayName || name, count: Number(item.count || item.amount || 0) };
   }
 
   function inventoryGlyph(name) {
@@ -480,6 +485,16 @@
     return '✹';
   }
 
+  function itemIconMarkup(name) {
+    let clean = String(name || '').replace(/^minecraft:/, '').replace(/[^a-zA-Z0-9_./-]/g, '');
+    if (clean.includes('spear')) clean = clean.replace('spear', 'trident');
+    if (clean === 'glass_pane') clean = 'white_stained_glass_pane';
+    const itemUrl = `https://assets.mcasset.cloud/1.21.4/assets/minecraft/textures/item/${clean}.png`;
+    const blockName = clean.endsWith('_pane') ? clean.replace(/_pane$/, '') : clean;
+    const blockUrl = `https://assets.mcasset.cloud/1.21.4/assets/minecraft/textures/block/${blockName}.png`;
+    return `<span class="item-icon-wrap"><span class="inv-glyph">${inventoryGlyph(clean)}</span><img class="item-icon" src="${itemUrl}" data-block-src="${blockUrl}" alt="" loading="lazy" onerror="if(this.dataset.blockUsed){this.style.display='none'}else{this.dataset.blockUsed='1';this.src=this.dataset.blockSrc}"></span>`;
+  }
+
   function renderInventory(data, bot) {
     const snapshot = data?.snapshot || data || {};
     const hotbar = Array.isArray(snapshot.hotbar) ? snapshot.hotbar : [];
@@ -487,12 +502,17 @@
       ? 'Inventory is available when the bot is online.'
       : `Health ${Number(snapshot.health ?? 20).toFixed(0)} · Food ${Number(snapshot.food ?? 20).toFixed(0)} · ${escapeHtml(snapshot.dimension || 'world')}`;
     $('inventory-status').textContent = `${bot?.name || 'Bot'} · ${status}`;
+    const selectedSlot = Number(snapshot.selectedSlot ?? 0);
     const renderSlots = (items, kind) => {
-      const count = kind === 'hotbar' ? 9 : Math.max(9, Math.ceil(items.length / 9) * 9);
+      const entries = items.map((raw, index) => ({ raw, slot: Number(raw?.slot ?? index) }));
+      const maxSlot = entries.reduce((max, entry) => Math.max(max, Number.isInteger(entry.slot) ? entry.slot : 0), 0);
+      const count = kind === 'hotbar' ? 9 : Math.max(9, maxSlot + 1, Math.ceil(items.length / 9) * 9);
+      const bySlot = new Map(entries.map((entry) => [entry.slot, entry.raw]));
       return Array.from({ length: count }, (_, index) => {
-        const item = inventoryItem(items[index]);
+        const item = inventoryItem(bySlot.get(index));
         const filled = !!item.name;
-        return `<button class="inv-slot ${filled ? 'filled' : ''}" data-inventory-kind="${kind}" data-inventory-slot="${index}" title="${escapeHtml(item.name || 'Empty slot')}">${filled ? `<span class="inv-glyph">${inventoryGlyph(item.name)}</span><span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>` : '<span class="inv-empty">·</span>'}${filled && item.count ? `<span class="inv-count">×${item.count}</span>` : ''}</button>`;
+        const selected = kind === 'hotbar' && (bySlot.get(index)?.selected === true || selectedSlot === index);
+        return `<button class="inv-slot ${filled ? 'filled' : ''} ${selected ? 'selected' : ''}" data-inventory-kind="${kind}" data-inventory-slot="${index}" title="${escapeHtml(item.displayName || item.name || 'Empty slot')}"><span class="slot-number">${kind === 'hotbar' ? index + 1 : ''}</span>${filled ? `${itemIconMarkup(item.name)}<span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>` : '<span class="inv-empty">·</span>'}${filled && item.count ? `<span class="inv-count">×${item.count}</span>` : ''}</button>`;
       }).join('');
     };
     $('inventory-grid').innerHTML = renderSlots(hotbar, 'hotbar');
@@ -584,6 +604,22 @@
     const statusNode = $('detail-status');
     statusNode.className = `bot-status-pill ${statusClass}`;
     statusNode.innerHTML = `<i></i>${statusLabel}`;
+    const beam = state.detailBeam || { looping: false, stage: '' };
+    const beamBadge = $('detail-beam-badge');
+    beamBadge.hidden = !beam.looping;
+    beamBadge.innerHTML = `<i></i>Beam · ${escapeHtml(beam.stage || 'running')}`;
+    const beamButton = $('detail-beam');
+    beamButton.disabled = state.detailActing || (!online && !beam.looping);
+    beamButton.textContent = beam.looping ? '■ Stop Beam' : '◈ Start Beam';
+    beamButton.classList.toggle('beam-stop', beam.looping);
+    beamButton.classList.toggle('beam-start', !beam.looping);
+    const ai = state.detailAi;
+    const aiCount = Number(ai?.gemini || 0) + Number(ai?.fallback || 0) + Number(ai?.failed || 0) + Number(ai?.pollinations || 0) + Number(ai?.openrouter || 0);
+    const aiBadge = $('detail-ai-badge');
+    aiBadge.hidden = aiCount === 0;
+    aiBadge.classList.toggle('ai-live', !!ai?.lastProvider && ai.lastProvider !== 'failed');
+    aiBadge.classList.toggle('ai-failed', ai?.lastProvider === 'failed');
+    aiBadge.textContent = ai?.lastProvider ? `AI · ${ai.lastProvider}${ai.lastLatencyMs ? ` · ${(Number(ai.lastLatencyMs) / 1000).toFixed(1)}s` : ''}` : 'AI · offline';
     $('detail-avatar').innerHTML = rawUsername
       ? `<span class="avatar-fallback">⚔</span><img class="mc-avatar-image" src="https://mc-heads.net/avatar/${encodeURIComponent(rawUsername)}/64" alt="" loading="lazy" onerror="this.style.display='none'">`
       : '<span class="avatar-fallback">⚔</span>';
@@ -601,6 +637,14 @@
     $('detail-screen-panel').hidden = state.detailTab !== 'screen';
     if (state.detailTab === 'screen') loadView(state.activeBotId);
     else loadConsole(state.activeBotId);
+    if (state.activeBotId) {
+      window.clearInterval(state.detailTimer);
+      state.detailTimer = window.setInterval(() => {
+        if (!state.activeBotId) return;
+        if (state.detailTab === 'screen') loadView(state.activeBotId);
+        else loadConsole(state.activeBotId);
+      }, state.detailTab === 'screen' ? 700 : 1500);
+    }
   }
 
   function closeConsole() {
@@ -608,6 +652,9 @@
     state.detailTimer = null;
     state.activeBotId = null;
     state.detailView = null;
+    state.detailBeam = { looping: false, stage: '' };
+    state.detailAi = null;
+    state.detailActing = false;
     $('console-wrap').hidden = true;
     $('console-panes').innerHTML = '';
     $('console-tabs').innerHTML = '';
@@ -642,7 +689,6 @@
     const line = String(raw);
     const lower = line.toLowerCase();
     if (!line.trim()) return false;
-    if (line.includes('§')) return false;
     if (['more than 1,000 items', 'packet-event', 'error reading packet', 'explode (id 36)', 'failed to fill whole buffer', 'packet explode', 'azalea_client::plugins::connection'].some((part) => lower.includes(part))) return false;
     if (/\b(joined|left)\b/.test(lower) && !/(azalea|spawned|logged in|disconnected|connected)/.test(lower)) return false;
     if (bot?.username && lower.includes(`${String(bot.username).toLowerCase()} joined`) && !lower.includes('azalea')) return false;
@@ -653,14 +699,22 @@
     if (!id || state.activeBotId !== id) return;
     try {
       const data = await api(`/api/bots/${encodeURIComponent(id)}/console`);
+      state.detailBeam = data.beam || { looping: false, stage: '' };
+      state.detailAi = data.ai || null;
       const bot = state.bots.find((item) => item.id === id);
+      if (bot && data.status) {
+        bot.status = data.status;
+        bot.lastError = data.lastError || null;
+      }
+      renderDetailHeader(bot);
       const logs = (Array.isArray(data.logs) ? data.logs : []).filter((entry) => usefulConsoleLine(entry, bot));
+      const errorOnly = data.lastError && !logs.some((entry) => String(entry?.line || entry?.message || '').includes(data.lastError));
       $('console-panes').innerHTML = logs.length ? logs.map((entry) => {
         const line = cleanConsoleLine(typeof entry === 'string' ? entry : (entry.line || entry.message || ''));
         const level = typeof entry === 'object' ? (entry.level || 'system') : 'system';
         const speakerClass = level === 'error' ? 'target' : level === 'chat' ? 'bot' : 'system';
-        return `<div class="console-line"><span class="time">${escapeHtml(formatTime(entry.ts || entry.time))}</span><span class="who-${speakerClass}">${escapeHtml(level)}</span>${escapeHtml(line)}</div>`;
-      }).join('') : '<div class="console-placeholder">No console lines yet. Start the bot to see its Azalea connection log.</div>';
+        return `<div class="console-line"><span class="time">${escapeHtml(formatTime(entry?.ts ?? entry?.time))}</span><span class="who-${speakerClass}">${escapeHtml(level)}</span>${escapeHtml(line)}</div>`;
+      }).join('') : errorOnly ? `<div class="console-line console-error"><span class="time">${escapeHtml(formatTime())}</span><span class="who-target">error</span>${escapeHtml(data.lastError)}</div>` : '<div class="console-placeholder">No console lines yet. Start the bot to see its Azalea connection log.</div>';
       const body = $('console-panes');
       if (body) body.scrollTop = body.scrollHeight;
     } catch (error) {
@@ -668,12 +722,28 @@
     }
   }
 
+  function setDetailActionBusy(busy) {
+    state.detailActing = busy;
+    all('[data-detail-hotbar-slot], [data-detail-gui-slot], [data-detail-move], #detail-use, #detail-drop, #detail-gui-close, #detail-beam').forEach((button) => {
+      if (button.dataset.detailGuiSlot !== undefined && button.disabled && !button.classList.contains('filled')) return;
+      button.disabled = busy;
+    });
+  }
+
   function renderGameView(data, bot) {
     const snapshot = data?.snapshot || { available: false };
     const available = snapshot.available !== false;
     $('game-view-empty').hidden = available;
     $('game-view-online').hidden = !available;
-    if (!available) return;
+    const emptyTitle = $('game-view-empty').querySelector('strong');
+    const emptyCopy = $('game-view-empty').querySelector('p');
+    if (!available) {
+      emptyTitle.textContent = data?.lastError ? 'The bot view is unavailable' : 'Waiting for the world view';
+      emptyCopy.textContent = data?.lastError || 'The bot must be online and spawned before its hotbar and open GUIs can be controlled.';
+      return;
+    }
+    emptyTitle.textContent = 'Waiting for the world view';
+    emptyCopy.textContent = 'The bot must be online and spawned before its hotbar and open GUIs can be controlled.';
 
     const health = Math.max(0, Math.min(20, Number(snapshot.health ?? 20)));
     const food = Math.max(0, Math.min(20, Number(snapshot.food ?? 20)));
@@ -709,22 +779,35 @@
     $('detail-hotbar').innerHTML = Array.from({ length: 9 }, (_, index) => {
       const item = inventoryItem(hotbar[index]);
       const filled = !!item.name;
-      const selected = hotbar[index]?.selected === true || Number(snapshot.selectedSlot) === index;
-      return `<button class="inv-slot ${filled ? 'filled' : ''} ${selected ? 'selected' : ''}" data-detail-hotbar-slot="${index}" title="${escapeHtml(item.name || 'Empty slot')}"><span class="slot-number">${index + 1}</span>${filled ? `<span class="inv-glyph">${inventoryGlyph(item.name)}</span><span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>${item.count > 1 ? `<span class="inv-count">×${item.count}</span>` : ''}` : '<span class="inv-empty">·</span>'}</button>`;
+      const candidateSlot = Number(hotbar[index]?.slot ?? index);
+      const slotNumber = Number.isInteger(candidateSlot) && candidateSlot >= 0 && candidateSlot < 9 ? candidateSlot : index;
+      const selected = hotbar[index]?.selected === true || Number(snapshot.selectedSlot) === slotNumber;
+      return `<button class="inv-slot ${filled ? 'filled' : ''} ${selected ? 'selected' : ''}" data-detail-hotbar-slot="${slotNumber}" title="${escapeHtml(item.displayName || item.name || 'Empty slot')}"><span class="slot-number">${slotNumber + 1}</span>${filled ? `${itemIconMarkup(item.name)}<span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>${item.count > 1 ? `<span class="inv-count">×${item.count}</span>` : ''}` : '<span class="inv-empty">·</span>'}</button>`;
     }).join('');
 
     const openWindow = snapshot.window && Array.isArray(snapshot.window.slots);
+    const worldLayout = document.querySelector('.game-layout');
+    const hotbarPanel = document.querySelector('.hotbar-panel');
+    const onlinePanel = $('game-view-online');
+    if (worldLayout) worldLayout.hidden = !!openWindow;
+    if (hotbarPanel) hotbarPanel.hidden = false;
+    if (onlinePanel) onlinePanel.classList.toggle('container-open', !!openWindow);
     $('detail-gui').hidden = !openWindow;
     if (openWindow) {
       $('detail-gui-title').textContent = snapshot.window.title || 'Open container';
+      $('detail-gui-count').textContent = `${snapshot.window.slots.filter(Boolean).length} items`;
       $('detail-gui-grid').innerHTML = snapshot.window.slots.map((entry, index) => {
         const item = inventoryItem(entry);
         const filled = !!item.name;
         const slot = Number(entry?.slot ?? index);
-        return `<button class="inv-slot ${filled ? 'filled' : ''}" data-detail-gui-slot="${slot}" title="${escapeHtml(item.name || 'Empty slot')}">${filled ? `<span class="inv-glyph">${inventoryGlyph(item.name)}</span><span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>${item.count > 1 ? `<span class="inv-count">×${item.count}</span>` : ''}` : '<span class="inv-empty">·</span>'}</button>`;
+        return `<button class="inv-slot ${filled ? 'filled' : ''}" data-detail-gui-slot="${slot}" title="${escapeHtml(item.displayName || item.name || 'Empty slot')}" ${filled ? '' : 'disabled'}>${filled ? `${itemIconMarkup(item.name)}<span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>${item.count > 1 ? `<span class="inv-count">×${item.count}</span>` : ''}` : '<span class="inv-empty">·</span>'}</button>`;
       }).join('');
     }
     $('hotbar-hint').textContent = `${bot?.name || 'Bot'} · click to select · use to open a GUI`;
+    all('[data-detail-move]').forEach((button) => { button.disabled = state.detailActing; });
+    $('detail-use').disabled = state.detailActing || !snapshot.heldItem;
+    $('detail-drop').disabled = state.detailActing || !snapshot.heldItem;
+    $('detail-gui-close').disabled = state.detailActing;
   }
 
   async function loadView(id) {
@@ -732,20 +815,59 @@
     try {
       const data = await api(`/api/bots/${encodeURIComponent(id)}/view`);
       state.detailView = data;
-      renderGameView(data, state.bots.find((item) => item.id === id));
+      state.detailBeam = data.beam || { looping: false, stage: '' };
+      state.detailAi = data.ai || null;
+      const bot = state.bots.find((item) => item.id === id);
+      if (bot && data.status) {
+        bot.status = data.status;
+        bot.lastError = data.lastError || null;
+      }
+      renderDetailHeader(bot);
+      renderGameView(data, bot);
     } catch (error) {
       $('game-view-empty').hidden = false;
       $('game-view-online').hidden = true;
       $('game-empty-icon').textContent = '×';
+      $('game-view-empty').querySelector('strong').textContent = 'Could not read the world view';
+      $('game-view-empty').querySelector('p').textContent = error.message;
     }
   }
 
   async function detailAction(action, payload = {}) {
-    if (!state.activeBotId) return;
+    if (!state.activeBotId || state.detailActing) return;
+    const id = state.activeBotId;
+    setDetailActionBusy(true);
     try {
-      await api(`/api/bots/${encodeURIComponent(state.activeBotId)}/action`, { method: 'POST', body: { action, ...payload } });
-      await loadView(state.activeBotId);
+      await api(`/api/bots/${encodeURIComponent(id)}/action`, { method: 'POST', body: { action, ...payload } });
+      await loadView(id);
     } catch (error) { toast(error.message); }
+    finally {
+      state.detailActing = false;
+      if (state.detailView && state.activeBotId === id) {
+        const bot = state.bots.find((item) => item.id === id);
+        renderGameView(state.detailView, bot);
+        renderDetailHeader(bot);
+      }
+    }
+  }
+
+  async function toggleDetailBeam() {
+    if (!state.activeBotId || state.detailActing) return;
+    const id = state.activeBotId;
+    const action = state.detailBeam?.looping ? 'beam_stop' : 'beam_start';
+    setDetailActionBusy(true);
+    renderDetailHeader(state.bots.find((item) => item.id === id));
+    try {
+      await api(`/api/bots/${encodeURIComponent(id)}/action`, { method: 'POST', body: { action } });
+    } catch (error) { toast(error.message); }
+    finally {
+      state.detailActing = false;
+      if (state.activeBotId === id) {
+        if (state.detailTab === 'screen') await loadView(id);
+        else await loadConsole(id);
+        renderDetailHeader(state.bots.find((item) => item.id === id));
+      }
+    }
   }
 
   async function toggleDetailBot() {
@@ -757,6 +879,7 @@
       await loadBots(true);
       renderDetailHeader(state.bots.find((item) => item.id === bot.id));
       if (state.detailTab === 'screen') await loadView(bot.id);
+      else await loadConsole(bot.id);
     } catch (error) { toast(error.message); }
   }
 
@@ -985,6 +1108,7 @@
       const bot = state.bots.find((item) => item.id === state.activeBotId);
       if (bot) openEditBot(bot);
     });
+    $('detail-beam')?.addEventListener('click', toggleDetailBeam);
     $('detail-toggle')?.addEventListener('click', toggleDetailBot);
     all('[data-detail-tab]').forEach((button) => button.addEventListener('click', () => setDetailTab(button.dataset.detailTab)));
     $('detail-use')?.addEventListener('click', () => detailAction('use'));
@@ -1017,7 +1141,12 @@
     all('.theme-swatch').forEach((button) => button.addEventListener('click', () => { const theme = button.dataset.theme; document.documentElement.dataset.theme = theme; localStorage.setItem('abeam-theme', theme); renderSettings(); }));
     $('motion-toggle')?.addEventListener('change', (event) => document.body.classList.toggle('reduced-motion', event.target.checked));
     $('sound-toggle')?.addEventListener('change', () => {});
-    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') all('.modal-overlay:not([hidden])').forEach((modal) => closeModal(modal.id)); });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') all('.modal-overlay:not([hidden])').forEach((modal) => closeModal(modal.id));
+      if (!state.activeBotId || state.detailTab !== 'screen' || (event.target instanceof Element && event.target.matches('input, textarea, select, button'))) return;
+      if (/^[1-9]$/.test(event.key)) detailAction('select', { slot: Number(event.key) - 1 });
+      if (event.key.toLowerCase() === 'r') detailAction('use');
+    });
   }
 
   async function init() {

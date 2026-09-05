@@ -1,9 +1,3 @@
-//! JSON-lines sidecar wrapping [Azalea](https://github.com/azalea-rs/azalea).
-//!
-//! Protocol (stdin = commands, stdout = events, stderr = tracing):
-//!   first stdin line: {"op":"start","host","port","username","uuid","token","proxy"?}
-//!   later commands:   {"op":"chat"|"disconnect"|"walk"|"jump"|"look"|"select"|"use"|"drop"|"sneak"|"closeWindow"|"clickWindow"}
-//!   events:           {"ev":"log"|"chat"|"status"|"error"|"death"|"player_add"|"player_remove"|"snapshot"|"end", ...}
 
 use std::{
     collections::VecDeque,
@@ -138,17 +132,11 @@ struct State {
     cmds: Arc<Mutex<VecDeque<Cmd>>>,
     walk_until_tick: Arc<Mutex<Option<u32>>>,
     tick: Arc<Mutex<u32>>,
-    /// Live client handle + connection state, so commands can be applied on a
-    /// wall-clock loop instead of only inside `Event::Tick` (which only fires
-    /// while the world is loaded — it stops during proxy server switches, e.g.
-    /// Minemen lobby → duel arena, which used to strand every chat command).
     client: Arc<Mutex<Option<Client>>>,
     online: Arc<Mutex<bool>>,
     last_tick: Arc<Mutex<Option<std::time::Instant>>>,
     last_stall_report: Arc<Mutex<u64>>,
     disconnect_times: Arc<Mutex<VecDeque<std::time::Instant>>>,
-    /// Set while a worker thread is applying commands; keeps batches ordered
-    /// and prevents piling calls onto a possibly-wedged ECS.
     applier_busy: Arc<AtomicBool>,
 }
 
@@ -207,7 +195,7 @@ fn display_name_from_id(id: &str) -> String {
 }
 
 fn kind_to_names(kind: &azalea::registry::builtin::ItemKind) -> (String, String) {
-    let full = kind.to_string(); // minecraft:stone
+    let full = kind.to_string();
     let name = full
         .strip_prefix("minecraft:")
         .unwrap_or(&full)
@@ -274,15 +262,12 @@ fn apply_cmd(bot: &Client, state: &State, cmd: Cmd) {
         "chat" => {
             if let Some(text) = cmd.text {
                 let is_cmd = text.starts_with('/');
-                // Log what we're sending for debugging beam visibility
                 let preview: String = text.chars().take(100).collect();
                 if is_cmd {
                     log_line("system", format!("Azalea sending command: {}", preview));
                 } else {
                     log_line("system", format!("Azalea sending chat: {}", preview));
                 }
-                // Azalea's chat() handles both signed chat and commands internally
-                // Wrap in catch_unwind to avoid panic killing the sidecar
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     bot.chat(text.clone());
                 }));
@@ -338,7 +323,6 @@ fn apply_cmd(bot: &Client, state: &State, cmd: Cmd) {
         }
         "use_stop" => {}
         "drop" => {
-            // Drop entire stack in selected hotbar slot via ThrowClick::All
             let menu = bot.menu();
             let hotbar_range = menu.hotbar_slots_range();
             let selected = bot.selected_hotbar_slot() as usize;
@@ -352,7 +336,6 @@ fn apply_cmd(bot: &Client, state: &State, cmd: Cmd) {
         "clickWindow" => {
             if let Some(slot) = cmd.slot {
                 let inv = bot.get_inventory();
-                // left click the window slot
                 inv.click(PickupClick::Left {
                     slot: Some(slot as u16),
                 });
@@ -377,7 +360,6 @@ fn facing_from_yaw(yaw_deg: f32) -> &'static str {
 }
 
 fn snapshot(bot: &Client) -> Value {
-    // Position, direction, hunger, health – all infallible in 0.16 docs.rs
     let pos = bot.position();
     let hunger = bot.hunger();
     let food = hunger.food as f64;
@@ -387,7 +369,6 @@ fn snapshot(bot: &Client) -> Value {
     let selected = bot.selected_hotbar_slot();
     let health = bot.health() as f64;
 
-    // Inventory: real hotbar via menu
     let menu = bot.menu();
     let all_slots = menu.slots();
     let hotbar_range = menu.hotbar_slots_range();
@@ -400,7 +381,6 @@ fn snapshot(bot: &Client) -> Value {
         hotbar_json.push(stack_to_json(i, stack, i as u8 == selected));
     }
 
-    // Held item
     let held_stack = bot.get_held_item();
     let held_json = match &held_stack {
         ItemStack::Empty => Value::Null,
@@ -410,7 +390,6 @@ fn snapshot(bot: &Client) -> Value {
         }
     };
 
-    // Window: if not Player menu, show container contents via get_inventory().contents()
     let window_json = match &menu {
         Menu::Player(_) => Value::Null,
         _ => {
@@ -439,7 +418,6 @@ fn snapshot(bot: &Client) -> Value {
                     "slots": slots
                 })
             } else {
-                // fallback: empty window with title
                 json!({
                     "title": title,
                     "slots": []
@@ -487,8 +465,6 @@ async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
         Event::Login => {
             log_line("system", "Logged in to the server.");
             *state.client.lock() = Some(bot.clone());
-            // Drop commands queued from the previous session so a reconnect
-            // doesn't flush stale chat/messages all at once.
             state.cmds.lock().clear();
             emit(&json!({ "ev": "status", "status": "online" }));
         }
@@ -522,9 +498,6 @@ async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
                     *state.walk_until_tick.lock() = None;
                 }
             }
-            // NOTE: commands are no longer drained here. They are applied by a
-            // dedicated wall-clock task in main() so chat keeps working even
-            // when the world isn't ticking (arena/server switches).
             if tick % 10 == 0 {
                 emit(&snapshot(&bot));
             }
@@ -552,9 +525,6 @@ async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
             *state.online.lock() = false;
             *state.client.lock() = None;
             *state.last_tick.lock() = None;
-            // Rate-limit reconnects: if we've been kicked 4+ times in the last
-            // 5 minutes, stop retrying and shut down so the dashboard shows a
-            // real error instead of an infinite kick/rejoin loop (e.g. banned).
             let now = std::time::Instant::now();
             let too_many = {
                 let mut times = state.disconnect_times.lock();
@@ -572,8 +542,6 @@ async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
                 emit(&json!({ "ev": "end", "line": text }));
                 bot.exit();
             } else {
-                // reconnect_after is enabled, so azalea will rejoin on its own;
-                // stay alive so chat commands keep queueing for the next session.
                 log_line(
                     "system",
                     format!("Disconnected ({text}); auto-reconnecting in a few seconds…"),
@@ -591,12 +559,6 @@ async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
     Ok(())
 }
 
-// NOTE: current_thread flavor is REQUIRED, not an optimization. Azalea's docs
-// warn that calling client methods from a plain `tokio::spawn` task lets Tokio
-// schedule a Minecraft tick / handler at an unexpected moment, breaking ECS
-// invariants — which is exactly how the client wedged (ticks + chat die, the
-// process lives) when the beam fired walk//msg commands during a world switch.
-// Everything that touches the Client must run on this thread's LocalSet.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt()
@@ -662,12 +624,8 @@ async fn main() -> eyre::Result<()> {
         applier_busy: Arc::new(AtomicBool::new(false)),
     };
 
-    // All tasks below run on a LocalSet on this single thread (see the note on
-    // the current_thread tokio flavor above). Never use plain tokio::spawn for
-    // anything that touches the azalea Client.
     let local = tokio::task::LocalSet::new();
 
-    // Stdin command reader → queue (queue-only, no Client access).
     {
         let st = state.clone();
         local.spawn_local(async move {
@@ -706,17 +664,6 @@ async fn main() -> eyre::Result<()> {
         });
     }
 
-    // Command applier, hardened against the world-switch deadlock:
-    //  1. World-switch gating — a Client call (walk/chat) that lands while the
-    //     server is switching worlds (ticks paused) blocks on an ECS lock that
-    //     is held across an await, and on this single-threaded runtime that
-    //     deadlocks the WHOLE process (heartbeat included). So commands are
-    //     only applied while the world is ticking normally (<1.5s tick age);
-    //     otherwise they're held until ticks resume (dropped after 20s).
-    //  2. Off-thread application — even when fresh, commands run on a
-    //     disposable OS thread, so if a call still wedges it kills only that
-    //     worker, never the runtime thread: the heartbeat stays alive and the
-    //     Node supervisor gets a clean zombie detection → restart.
     {
         let st = state.clone();
         local.spawn_local(async move {
@@ -724,7 +671,7 @@ async fn main() -> eyre::Result<()> {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 if !*st.online.lock() {
-                    continue; // not spawned yet — commands queue until Spawn
+                    continue;
                 }
                 let fresh = st
                     .last_tick
@@ -761,7 +708,7 @@ async fn main() -> eyre::Result<()> {
                 }
                 holding_since = None;
                 if st.applier_busy.swap(true, AtomicOrdering::SeqCst) {
-                    continue; // previous batch still applying off-thread
+                    continue;
                 }
                 let cmds: Vec<Cmd> = st.cmds.lock().drain(..).collect();
                 let client = st.client.lock().clone();
@@ -783,12 +730,6 @@ async fn main() -> eyre::Result<()> {
         });
     }
 
-    // Watchdog + heartbeat:
-    //  - Event::Tick only fires while the world is loaded; if ticks die while
-    //    we're connected (arena-switch wedge), chat events and snapshots die
-    //    with them → force a reconnect so the client recovers.
-    //  - A heartbeat every ~2s lets the Node supervisor tell "sidecar alive"
-    //    from "process wedged" and restart the whole sidecar if needed.
     {
         let st = state.clone();
         local.spawn_local(async move {
@@ -815,9 +756,6 @@ async fn main() -> eyre::Result<()> {
                         );
                         let client = st.client.lock().clone();
                         if let Some(client) = client {
-                            // Run on a disposable OS thread — disconnect() can
-                            // block on the same ECS lock that wedged the applier,
-                            // and it must never kill the runtime thread (heartbeat).
                             std::thread::spawn(move || {
                                 let _ = std::panic::catch_unwind(
                                     std::panic::AssertUnwindSafe(|| client.disconnect()),

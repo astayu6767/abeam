@@ -77,7 +77,6 @@ function isEnabled(record) {
 function publicProxy(raw) {
   const value = asString(raw).trim();
   if (!value) return '';
-  // Do not expose proxy credentials in list/detail responses.
   try {
     const url = new URL(value.includes('://') ? value : `socks5://${value}`);
     if (url.username || url.password) {
@@ -86,7 +85,6 @@ function publicProxy(raw) {
       return url.toString();
     }
   } catch {
-    // Keep malformed values masked rather than echoing them verbatim.
     return '[configured]';
   }
   return value;
@@ -189,7 +187,6 @@ function parseHostAndPort(rawHost, rawPort, fallbackPort = 25565) {
   let port = Number(rawPort);
   if (!Number.isInteger(port) || port < 1 || port > 65535) port = fallbackPort;
 
-  // Bracketed IPv6: [2001:db8::1]:25565
   if (host.startsWith('[')) {
     const end = host.indexOf(']');
     if (end > 0) {
@@ -204,8 +201,6 @@ function parseHostAndPort(rawHost, rawPort, fallbackPort = 25565) {
     return { host, port };
   }
 
-  // Only treat the last colon as a port delimiter when the address is not an
-  // unbracketed IPv6 literal.
   const colonCount = (host.match(/:/g) || []).length;
   const colon = host.lastIndexOf(':');
   if (colon > 0 && colonCount === 1) {
@@ -253,8 +248,6 @@ function normalizeBotInput(input = {}, existing = {}) {
     beamIp: clampText(input.beamIp !== undefined ? input.beamIp : existing.beamIp, 253, 'badlion-pvp.xyz') || 'badlion-pvp.xyz',
     discordUser: clampText(input.discordUser !== undefined ? input.discordUser : existing.discordUser, 128, 'stood014') || 'stood014',
     engine,
-    // Azalea is the production/default engine. Mineflayer is retained for
-    // local compatibility when explicitly requested by an operator.
     beamType: ['ai', 'spam', 'lobby'].includes(input.beamType ?? existing.beamType)
       ? (input.beamType ?? existing.beamType)
       : 'ai',
@@ -385,7 +378,6 @@ function profileFromTokenPayload(token) {
       return { id: String(profile.id).replace(/-/g, ''), name: String(profile.name) };
     }
   } catch {
-    // Fall back to the Minecraft profile endpoint below.
   }
   return null;
 }
@@ -410,9 +402,6 @@ function pemToDer(pem) {
     .reduce((buffer, line) => Buffer.concat([buffer, Buffer.from(line, 'base64')]), Buffer.alloc(0));
 }
 
-// Minecraft 1.19+ servers can require the account's secure-chat
-// certificate. Fetching it is best effort, matching the reference manager:
-// older/offline-mode servers still work when the endpoint is unavailable.
 async function fetchProfileKeys(token) {
   const response = await fetch('https://api.minecraftservices.com/player/certificates', {
     method: 'POST',
@@ -510,6 +499,10 @@ function configForRecord(record) {
   }
   return {
     ...resolved,
+    ai: {
+      ...(resolved.ai || {}),
+      enabled: record.aiRephrasing !== false && !!resolved.ai?.key,
+    },
     persona: {
       ...(resolved.persona || {}),
       ...profileForRecord(record, { name: record.username }),
@@ -661,10 +654,6 @@ function attachAzalea(runtime, record, profile) {
     onSnapshot: (snapshot) => {
       runtime.azaleaSnap = snapshot;
     },
-    // Tab-list churn is extremely noisy on proxy networks and some servers
-    // send malformed formatting codes as player names. The UI already shows
-    // the useful spawn/join state, so do not flood the console with every
-    // player add/remove packet.
     onPlayerAdded: () => {},
     onPlayerRemoved: () => {},
     onError: (message) => {
@@ -747,8 +736,6 @@ function attachMineflayer(runtime, record, profile, bot, timeout) {
     persistStatus(record.id, 'online', null, { username: profile.name, uuid: profile.id });
     log(runtime, 'system', `joined ${record.host}:${record.port}`);
 
-    // Keep the same low-noise anti-AFK behavior exposed by the reference
-    // manager. It is opt-in per bot and stops automatically on disconnect.
     if (record.antiAfk === true || record.antiAfk === 'true') {
       stopAntiAfk(runtime);
       const interval = Math.max(15, Number(record.antiAfkInterval) || 120) * 1000;
@@ -791,8 +778,6 @@ function attachMineflayer(runtime, record, profile, bot, timeout) {
     const text = error?.message || String(error);
     runtime.lastError = text;
     log(runtime, 'error', text);
-    // Mineflayer usually emits end after error; keep the status useful if it
-    // does not, while allowing the end handler to schedule a reconnect.
     setStatus(runtime, 'error', text);
   });
 
@@ -911,8 +896,6 @@ async function startMineflayer(runtime, record, profile, profileKeys = null) {
       keepAlive: true,
       ...(connect ? { connect } : {}),
       auth(client, options) {
-        // Mineflayer's reference manager injects the already-issued bearer
-        // token instead of launching an interactive Microsoft login flow.
         client.session = {
           accessToken: record.token,
           selectedProfile: { id: profile.id, name: profile.name },
@@ -1043,7 +1026,20 @@ export async function selectHotbarSlot(id, slot) {
   if (!Number.isInteger(n) || n < 0 || n > 8) return { ok: false, message: 'hotbar slot must be 0-8' };
   try {
     await runtime.bot.setQuickBarSlot(n);
-    return { ok: true, message: `selected hotbar slot ${n}` };
+    const selectedItem = runtime.azaleaSnap?.hotbar?.find((item) => Number(item?.slot ?? -1) === n) || runtime.azaleaSnap?.hotbar?.[n];
+    runtime.bot.heldItem = selectedItem?.name
+      ? { name: selectedItem.name, displayName: selectedItem.displayName || selectedItem.name, count: Number(selectedItem.count || 0) }
+      : null;
+    if (runtime.azaleaSnap) {
+      runtime.azaleaSnap = {
+        ...runtime.azaleaSnap,
+        selectedSlot: n,
+        heldItem: selectedItem?.name || null,
+        hotbar: (runtime.azaleaSnap.hotbar || []).map((item, index) => item ? { ...item, selected: index === n } : item),
+      };
+    }
+    log(runtime, 'system', `selected hotbar slot ${n + 1}`);
+    return { ok: true, message: `selected hotbar slot ${n + 1}` };
   } catch (e) {
     return { ok: false, message: e?.message || String(e) };
   }
@@ -1052,25 +1048,39 @@ export async function selectHotbarSlot(id, slot) {
 export async function useHeldItem(id) {
   const { runtime, error } = onlineRuntime(id);
   if (error) return { ok: false, message: error };
+  const held = runtime.bot.heldItem;
+  if (!held) return { ok: false, message: 'nothing in hand to use' };
+  const name = String(held.name || '');
+  const consumable = /(beef|porkchop|chicken|mutton|rabbit|cod|salmon|bread|apple|carrot|potato|beetroot|melon|berries|cookie|pie|stew|soup|honey|milk|potion|chorus|kelp|rotten|spider_eye|pufferfish|tropical)/i.test(name);
   try {
-    runtime.bot.activateItem();
+    runtime.bot.using = true;
+    if (consumable && typeof runtime.bot.consume === 'function') {
+      log(runtime, 'system', `consuming ${held.displayName || name}`);
+      await runtime.bot.consume();
+    } else {
+      log(runtime, 'system', `using ${held.displayName || name}`);
+      runtime.bot.activateItem();
+      await new Promise((resolve) => setTimeout(resolve, 1600));
+      runtime.bot.deactivateItem?.();
+    }
+    runtime.bot.using = false;
     return { ok: true, message: 'used held item' };
   } catch (e) {
-    return { ok: false, message: e?.message || String(e) };
+    runtime.bot.using = false;
+    const message = e?.message || String(e);
+    log(runtime, 'error', `use item failed: ${message}`);
+    return { ok: false, message };
   }
 }
 
 export async function dropHeldItem(id) {
   const { runtime, error } = onlineRuntime(id);
   if (error) return { ok: false, message: error };
+  const held = runtime.bot.heldItem;
+  if (!held) return { ok: false, message: 'nothing in hand to drop' };
   try {
-    if (typeof runtime.bot.tossStack === 'function' && runtime.bot.heldItem) {
-      await runtime.bot.tossStack(runtime.bot.heldItem);
-    } else if (runtime.bot._client?.write) {
-      runtime.bot._client.write('drop_item', { dropStack: true, dropAll: false });
-    } else {
-      return { ok: false, message: 'inventory controls are unavailable' };
-    }
+    await runtime.bot.tossStack(held);
+    log(runtime, 'system', `dropped ${held.displayName || held.name}`);
     return { ok: true, message: 'dropped held item' };
   } catch (e) {
     return { ok: false, message: e?.message || String(e) };
@@ -1102,6 +1112,7 @@ export async function clickWindowSlot(id, slot) {
   try {
     if (!runtime.bot.currentWindow) return { ok: false, message: 'no inventory window is open' };
     await runtime.bot.clickWindow(n, 0, 0);
+    log(runtime, 'system', `clicked window slot ${n}`);
     return { ok: true, message: `clicked window slot ${n}` };
   } catch (e) {
     return { ok: false, message: e?.message || String(e) };
@@ -1113,6 +1124,9 @@ export async function closeWindow(id) {
   if (error) return { ok: false, message: error };
   try {
     if (runtime.bot.currentWindow) runtime.bot.closeWindow(runtime.bot.currentWindow);
+    runtime.bot.currentWindow = null;
+    if (runtime.azaleaSnap) runtime.azaleaSnap = { ...runtime.azaleaSnap, window: null };
+    log(runtime, 'system', 'closed inventory window');
     return { ok: true, message: 'closed inventory window' };
   } catch (e) {
     return { ok: false, message: e?.message || String(e) };
@@ -1174,6 +1188,20 @@ export function getViewSnapshot(id) {
   const bot = runtime?.bot;
   if (!bot || runtime?.status !== 'online') return { available: false };
   if (runtime.azaleaSnap) {
+    const raw = runtime.azaleaSnap;
+    const selectedCandidate = Number(raw.selectedSlot ?? bot.quickBarSlot ?? 0);
+    const selectedSlot = Number.isInteger(selectedCandidate) && selectedCandidate >= 0 && selectedCandidate < 9 ? selectedCandidate : 0;
+    const sourceHotbar = Array.isArray(raw.hotbar) ? raw.hotbar : [];
+    const hotbar = Array.from({ length: 9 }, (_, slot) => {
+      const item = sourceHotbar.find((entry) => Number(entry?.slot ?? -1) === slot) || sourceHotbar[slot] || null;
+      return itemView(item, slot, item?.selected === true || selectedSlot === slot);
+    });
+    const window = raw.window && Array.isArray(raw.window.slots)
+      ? {
+          title: raw.window.title || 'Container',
+          slots: raw.window.slots.map((item, slot) => item ? itemView(item, Number(item.slot ?? slot)) : null),
+        }
+      : null;
     const players = Object.values(bot.players || {}).map((player) => ({
       username: player.username,
       position: player.entity?.position
@@ -1181,11 +1209,14 @@ export function getViewSnapshot(id) {
         : null,
     }));
     return {
-      ...runtime.azaleaSnap,
+      ...raw,
       available: true,
-      username: runtime.azaleaSnap.username || bot.username || runtime.profile?.name || null,
+      username: raw.username || bot.username || runtime.profile?.name || null,
+      selectedSlot,
+      hotbar,
+      using: raw.using === true || bot.using === true,
       players,
-      window: runtime.azaleaSnap.window || null,
+      window,
     };
   }
   const position = bot.entity?.position;

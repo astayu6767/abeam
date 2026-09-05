@@ -45,6 +45,7 @@ import {
 import { creditBalance, grantCreditTopup } from './billing/credits.js';
 import { generateLicenseKey, redeemLicenseKey, listLicenseKeys, clampMonths } from './billing/licenses.js';
 import { pingServer, pingServers } from './mcping.js';
+import { getAiProviderStats } from './ai/index.js';
 import { logDevlog } from './webhook/index.js';
 import { BotSupervisor } from './bots/supervisor.js';
 import { store } from './store/index.js';
@@ -86,32 +87,31 @@ function isAdmin(user) {
 }
 
 app.use(cors({ origin: config.appUrl, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '64kb' }));
+app.use((error, _req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && Object.prototype.hasOwnProperty.call(error, 'body')) {
+    return res.status(400).json({ error: 'invalid_json', message: 'Invalid JSON body' });
+  }
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'payload_too_large', message: 'Request body is too large' });
+  }
+  return next(error);
+});
 app.use(cookieParser());
 app.use(express.static(PUBLIC_DIR));
 app.set('trust proxy', 1);
 
-// The original abeam landing page and operator dashboard are served by the
-// same Express process as the API. `/dashboard` remains a convenient alias.
 app.get(['/', '/dashboard', '/dashboard/'], (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
-// Railway and uptime monitors use this endpoint; it intentionally does not
-// touch billing, Minecraft services, or the JSON store.
 app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'abeam' }));
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'abeam' }));
 
-// Seed the dev/demo SSID so the bot can hook up before Discord OAuth is set.
-// Only ever active in non-production (config.allowDemo is hard-gated).
 if (config.allowDemo) {
   upsertStaticToken(config.demoSsid, config.demoEmail);
 }
 
-// ---------------------------------------------------------------
-// API: SSID access-token auth (bot + scripts)
-// ---------------------------------------------------------------
-// Auth middleware for API routes: requires a valid SSID.
 function requireSsid(req, res, next) {
   const auth = validateToken(tokenFromHeader(req));
   if (!auth) {
@@ -121,16 +121,12 @@ function requireSsid(req, res, next) {
   next();
 }
 
-// Obtain/rotate a fresh SSID for an email (use to provision bot).
 app.post('/api/tokens', (req, res) => {
   const email = (req.body?.email || '').toString().trim().toLowerCase();
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return res.status(400).json({ error: 'valid email required' });
   }
 
-  // The original endpoint was intentionally open for local bot testing. Do
-  // not let an internet user mint an SSID for somebody else's account in
-  // production: the new /api/bots routes use this identity as their owner.
   if (config.env === 'production') {
     const session = getSessionUser(req, config.sessionSecret);
     const bearer = validateToken(tokenFromHeader(req));
@@ -144,12 +140,10 @@ app.post('/api/tokens', (req, res) => {
   res.json({ ssid, email });
 });
 
-// Guarded health: pings back the authed email.
 app.get('/api/me', requireSsid, (req, res) => {
   res.json({ email: req.user.email });
 });
 
-// Bot settings (Beam AI key etc.) — trivial passthrough stub.
 app.get('/api/settings', requireSsid, (req, res) => {
   res.json({ email: req.user.email });
 });
@@ -157,12 +151,6 @@ app.put('/api/settings', requireSsid, (req, res) => {
   res.json({ ok: true, email: req.user.email });
 });
 
-// ---------------------------------------------------------------
-// Email/password auth (dashboard login)
-// ---------------------------------------------------------------
-// The reference UI calls these endpoints with a username. The original
-// backend used email addresses, so local usernames are stored in an internal
-// `local:` account namespace while email logins remain compatible.
 function accountKeyForLogin(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -297,9 +285,6 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------------------------------------------------------------
-// Discord OAuth (website login)
-// ---------------------------------------------------------------
 const DISCORD_AUTH_URL = 'https://discord.com/api/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';
 
@@ -368,14 +353,11 @@ app.get('/logout', (req, res) => {
   res.redirect('/');
 });
 
-// Web "who am I" for the dashboard.
 app.get('/api/me/web', (req, res) => {
   const user = getSessionUser(req, config.sessionSecret);
   res.json({ user, isAdmin: isAdmin(user) });
 });
 
-// Require a Discord web session for purchasing / managing slots.
-// Also accepts a valid SSID bearer token, so dev/demo logins work too.
 function requireWeb(req, res, next) {
   const session = getSessionUser(req, config.sessionSecret);
   if (session) {
@@ -390,8 +372,6 @@ function requireWeb(req, res, next) {
   return res.status(401).json({ error: 'not_signed_in' });
 }
 
-// Operator-only routes. Identity-gated (no token ever crosses the wire);
-// the admin token is only ever used server-side.
 function requireAdmin(req, res, next) {
   const route = req.method + ' ' + req.path;
   const session = getSessionUser(req, config.sessionSecret);
@@ -420,14 +400,6 @@ function stopBotsFor(email) {
   });
 }
 
-// ---------------------------------------------------------------
-// Created bot API (Azalea runtime)
-// ---------------------------------------------------------------
-// This is the backend equivalent of mc-bot-manager's /api/bots routes. It is
-// deliberately separate from /api/slots, which controls the legacy external
-// abeam executable. Created bots run through the compiled Azalea sidecar; a
-// bot belongs to the signed-in account and its Minecraft bearer token is
-// accepted on write but never returned in JSON.
 function requireBotUser(req, res, next) {
   return requireWeb(req, res, next);
 }
@@ -441,7 +413,6 @@ function botRecordForRequest(req, id) {
 }
 
 function botQuota(email, admin = false) {
-  // -1 is the JSON-safe representation of unlimited admin capacity.
   if (admin) return -1;
   const sub = getSubscriber(email);
   if (!sub || !isActiveSubscriber(email) || (sub.status && sub.status !== 'active')) return 0;
@@ -498,8 +469,6 @@ app.post('/api/bots', requireBotUser, (req, res) => {
   }
   try {
     const record = createManagedBot(req.web.email, req.body || {});
-    // Match the reference manager: creation persists first, then connection is
-    // kicked off without blocking the HTTP response on the Minecraft handshake.
     void enableBot(record.id);
     return res.status(201).json({
       bot: publicBotById(req, record.id),
@@ -564,10 +533,12 @@ app.get('/api/bots/:id/console', requireBotUser, (req, res) => {
   const { record, allowed } = botRecordForRequest(req, req.params.id);
   if (!record) return res.status(404).json({ error: 'bot_not_found' });
   if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  res.set('Cache-Control', 'no-store');
   res.json({
     logs: getLogs(req.params.id),
     ...getRuntimeView(req.params.id),
     beam: referenceBeamState(req.params.id),
+    ai: getAiProviderStats(),
   });
 });
 
@@ -587,7 +558,8 @@ app.get('/api/bots/:id/view', requireBotUser, (req, res) => {
   const { record, allowed } = botRecordForRequest(req, req.params.id);
   if (!record) return res.status(404).json({ error: 'bot_not_found' });
   if (!allowed) return res.status(403).json({ error: 'forbidden' });
-  res.json({ ...getRuntimeView(req.params.id), snapshot: getViewSnapshot(req.params.id), beam: referenceBeamState(req.params.id) });
+  res.set('Cache-Control', 'no-store');
+  res.json({ ...getRuntimeView(req.params.id), snapshot: getViewSnapshot(req.params.id), beam: referenceBeamState(req.params.id), ai: getAiProviderStats() });
 });
 
 app.post('/api/bots/:id/action', requireBotUser, async (req, res) => {
@@ -629,9 +601,6 @@ app.post('/api/bots/:id/action', requireBotUser, async (req, res) => {
   res.json(result);
 });
 
-// ---------------------------------------------------------------
-// Pricing + checkout (LTC billing)
-// ---------------------------------------------------------------
 app.get('/api/plans', (req, res) => {
   res.json({
     plans: paidPlans(),
@@ -648,8 +617,6 @@ function referenceShopPlan(plan) {
     price: plan.priceUsd,
     finalPrice: plan.priceUsd,
     bots: plan.botSlots,
-    // The legacy plan model is monthly; keep the reference card's daily
-    // capacity wording without changing the plan's actual entitlement.
     hours: 24,
     features: plan.features || [],
     popular: !!plan.popular,
@@ -666,7 +633,6 @@ function referenceInvoice(invoice) {
   try {
     ownerLtcAddress = ownerAddress();
   } catch {
-    // A production deployment without LTC_SEED can still browse the shop.
   }
   return {
     id: invoice.id,
@@ -695,8 +661,6 @@ function ensureShopLicense(invoice) {
   return invoice.licenseKey;
 }
 
-// Compatibility routes for the reference shop panel. They translate the
-// existing Abeam LTC invoice model instead of introducing a second store.
 app.get('/api/shop/plans', async (_req, res) => {
   let ltcPrice = Number(config.ltcUsdRate) || 0;
   try {
@@ -761,7 +725,6 @@ app.post('/api/shop/invoices/:id/check', requireWeb, async (req, res) => {
         });
       }
     } catch {
-      // Keep the checkout polling-friendly when BlockCypher is rate-limited.
     }
   }
 
@@ -787,9 +750,6 @@ app.get('/api/shop/settings', requireAdmin, (_req, res) => {
 });
 
 app.post('/api/shop/settings', requireAdmin, (req, res) => {
-  // The wallet address is deterministically derived from LTC_SEED in this
-  // backend. Keep the endpoint for the reference admin screen but do not allow
-  // an arbitrary address to replace the signing wallet.
   let ownerLtcAddress = '';
   try {
     ownerLtcAddress = ownerAddress();
@@ -797,7 +757,6 @@ app.post('/api/shop/settings', requireAdmin, (req, res) => {
   res.json({ ok: true, ownerLtcAddress });
 });
 
-// Create an invoice (fresh LTC receive address) for a paid plan.
 app.post('/api/plans/:id/invoice', requireWeb, async (req, res) => {
   try {
     const invoice = await createInvoice(req.params.id, req.web.email);
@@ -807,7 +766,6 @@ app.post('/api/plans/:id/invoice', requireWeb, async (req, res) => {
   }
 });
 
-// Live invoice status + QR (polled by the checkout modal).
 app.get('/api/invoices/:id', async (req, res) => {
   const invoice = getInvoice(req.params.id);
   if (!invoice) return res.status(404).json({ error: 'invoice not found' });
@@ -831,7 +789,6 @@ app.post('/api/credits/buy', requireWeb, async (req, res) => {
   }
 });
 
-// Cancel a pending invoice (only allowed while it's not paid).
 app.delete('/api/invoices/:id', requireWeb, (req, res) => {
   const invoice = getInvoice(req.params.id);
   if (!invoice) return res.status(404).json({ error: 'invoice not found' });
@@ -847,11 +804,6 @@ app.delete('/api/invoices/:id', requireWeb, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------------------------------------------------------------
-// Account + slot management (paid-only via accountForBearer)
-// ---------------------------------------------------------------
-// The supervisor reconciles managed abeam.exe bot processes against active
-// subscribers. Declared here before the routes that reference it.
 const supervisor = new BotSupervisor();
 
 app.get('/api/account', requireWeb, (req, res) => {
@@ -891,9 +843,6 @@ app.get('/api/account', requireWeb, (req, res) => {
   });
 });
 
-// A subscriber's license history: current subscription + every invoice paid
-// (or pending) for their account. The slot fields mirror the reference UI;
-// the invoice/current fields remain for older API consumers.
 app.get('/api/licenses', requireWeb, (req, res) => {
   const email = req.web.email;
   const invoices = store.invoices
@@ -986,11 +935,8 @@ app.get('/api/licenses', requireWeb, (req, res) => {
   });
 });
 
-// Redeem a one-time serial license key; grants its plan to the signed-in account.
 app.post('/api/licenses/redeem', requireWeb, (req, res) => {
   const rawCode = String(req.body?.code || req.body?.key || '').trim();
-  // Legacy serials were case-insensitive; the reference key format is already
-  // lower-case but accepting both keeps old keys redeemable.
   const code = rawCode.toLowerCase().startsWith('abeam-key-') ? rawCode : rawCode.toUpperCase();
   const email = req.web.email;
   if (!code) return res.status(400).json({ error: 'code_required' });
@@ -1005,7 +951,6 @@ app.post('/api/licenses/redeem', requireWeb, (req, res) => {
   });
 });
 
-// Operator-only: mint serial license keys (default count 1, cap 50).
 app.post('/api/licenses/generate', (req, res) => {
   if (!config.adminToken) return res.status(403).json({ error: 'admin_token_not_configured' });
   const sent = String(req.headers['x-admin-token'] || '');
@@ -1022,7 +967,6 @@ app.post('/api/licenses/generate', (req, res) => {
   }
 });
 
-// Operator overview: every subscriber on the platform.
 app.get('/api/admin/subscribers', requireAdmin, (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const all = store.subscribers.all() || {};
@@ -1047,7 +991,6 @@ app.get('/api/admin/subscribers', requireAdmin, (req, res) => {
   res.json({ subscribers: rows });
 });
 
-// Operator: full subscriber detail (credentials masked).
 app.get('/api/admin/subscribers/:email', requireAdmin, (req, res) => {
   const key = String(req.params.email).trim().toLowerCase();
   const sub = getSubscriber(key);
@@ -1093,7 +1036,6 @@ app.get('/api/admin/subscribers/:email', requireAdmin, (req, res) => {
   });
 });
 
-// Operator: every web user on the site (all users.json), not just subscribers.
 app.get('/api/admin/users', requireAdmin, (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const users = store.users.all() || [];
@@ -1163,8 +1105,6 @@ function ensureAdminSubscriber(email) {
   return sub;
 }
 
-// Reference AdminPanel compatibility: user-centric management wrappers over
-// the current email/local-account and persisted-bot stores.
 app.get('/api/admin/users/:id/bots', requireAdmin, (req, res) => {
   const key = adminAccountKey(req.params.id);
   res.json({ bots: listBots(key, false) });
@@ -1342,7 +1282,6 @@ app.post('/api/admin/training', requireAdmin, (req, res) => {
   res.json({ ok: true, training: !!state.enabled, learnings: state.learnings || '' });
 });
 
-// Operator: owner wallet / revenue overview (paid invoices + balance owed).
 app.get('/api/admin/wallet', requireAdmin, (req, res) => {
   const invoices = store.invoices.all().filter((i) => i.status === 'paid');
   const revenueUsd = invoices.reduce((n, i) => n + (Number(i.amountUsd) || 0), 0);
@@ -1367,8 +1306,6 @@ app.get('/api/admin/wallet', requireAdmin, (req, res) => {
   });
 });
 
-// Owner wallet (separate from admin stats): receive / sweep / send / history.
-// All invoice balances sweep into this single owner address.
 app.get('/api/ltc-price', requireAdmin, async (req, res) => {
   try {
     const price = await fetchLtcPrice();
@@ -1417,7 +1354,6 @@ app.get('/api/owner/wallet/txs', requireAdmin, (req, res) => {
   res.json({ ok: true, txs: store.walletLedger.all().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 200) });
 });
 
-// Operator: patch plan / status / slots / credits for a subscriber.
 app.put('/api/admin/subscribers/:email', requireAdmin, (req, res) => {
   const key = String(req.params.email).trim().toLowerCase();
   try {
@@ -1437,7 +1373,6 @@ app.put('/api/admin/subscribers/:email', requireAdmin, (req, res) => {
   }
 });
 
-// Operator: grant a plan + fresh SSID (manual sale / support).
 app.post('/api/admin/subscribers/:email/grant', requireAdmin, (req, res) => {
   const key = String(req.params.email).trim().toLowerCase();
   const planId = String(req.body?.planId || '').trim();
@@ -1451,12 +1386,11 @@ app.post('/api/admin/subscribers/:email/grant', requireAdmin, (req, res) => {
   }
 });
 
-// Operator: mint another long-lived SSID for a subscriber (rotation).
 app.post('/api/admin/subscribers/:email/ssid', requireAdmin, (req, res) => {
   const key = String(req.params.email).trim().toLowerCase();
   const sub = getSubscriber(key);
   if (!sub) return res.status(404).json({ error: 'no_such_subscriber' });
-  const ssid = createToken(key, 1000 * 60 * 60 * 24 * 365); // 1yr
+  const ssid = createToken(key, 1000 * 60 * 60 * 24 * 365);
   sub.ssids = sub.ssids || [];
   sub.ssids.push(ssid);
   if (sub.ssids.length > 8) sub.ssids = sub.ssids.slice(-8);
@@ -1466,7 +1400,6 @@ app.post('/api/admin/subscribers/:email/ssid', requireAdmin, (req, res) => {
   res.json({ ok: true, ssid });
 });
 
-// Operator: hard-delete a subscriber (stops bots, purges web sessions).
 app.delete('/api/admin/subscribers/:email', requireAdmin, (req, res) => {
   const key = String(req.params.email).trim().toLowerCase();
   stopBotsFor(key);
@@ -1482,7 +1415,6 @@ app.delete('/api/admin/subscribers/:email', requireAdmin, (req, res) => {
   res.json({ ok: true, existed });
 });
 
-// Operator-only: mint serial license keys (identity-gated; token stays server-side).
 app.post('/api/admin/licenses/generate', requireAdmin, (req, res) => {
   console.log('[admin] generate requested by', (req.web && (req.web.email || req.web.discordId)) || 'unknown');
   if (!config.adminToken) return res.status(503).json({ error: 'admin_token_not_configured' });
@@ -1500,7 +1432,6 @@ app.post('/api/admin/licenses/generate', requireAdmin, (req, res) => {
   }
 });
 
-// Operator-only: post a devlog entry with optional images to Discord.
 app.post('/api/admin/devlog', requireAdmin, async (req, res) => {
   const { title, body, images, tag, color } = req.body || {};
   if (!title || !body) return res.status(400).json({ error: 'title and body required' });
@@ -1515,7 +1446,6 @@ app.post('/api/admin/devlog', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Set the Minecraft server(s) a subscriber's managed bots join.
 app.put('/api/slots/servers', requireWeb, (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1526,8 +1456,6 @@ app.put('/api/slots/servers', requireWeb, (req, res) => {
   res.json({ servers: updated.targetServers });
 });
 
-// Set the Minecraft access token for a specific managed bot slot. Only the
-// access token is required — the UUID + username are derived+validated from it.
 app.put('/api/slots/:n/token', requireWeb, async (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1543,7 +1471,6 @@ app.put('/api/slots/:n/token', requireWeb, async (req, res) => {
   if (token.startsWith('••')) {
     return res.status(400).json({ error: 'enter a new access token' });
   }
-  // Validate the token and resolve the profile server-side.
   const v = await validateMinecraftToken(token);
   if (!v.ok) {
     return res.status(400).json({ error: v.message || v.reason });
@@ -1555,7 +1482,6 @@ app.put('/api/slots/:n/token', requireWeb, async (req, res) => {
     ...(sub.mcTokens[n] || {}),
     mcAccessToken: token,
     mcUuid: uuid,
-    // Trust the profile from Minecraft services over whatever was typed.
     mcUsername: username || String(mcUsername || '').trim(),
     mcName: String(mcName || '').trim(),
     mcProxy: String(mcProxy || '').trim(),
@@ -1567,7 +1493,6 @@ app.put('/api/slots/:n/token', requireWeb, async (req, res) => {
   res.json({ ok: true, slot: n, username: sub.mcTokens[n].mcUsername, uuid });
 });
 
-// Per-slot live status + config for the dashboard.
 app.get('/api/slots', requireWeb, (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1588,7 +1513,6 @@ app.get('/api/slots', requireWeb, (req, res) => {
   res.json({ slots });
 });
 
-// Live Minecraft server status for every configured bot slot.
 app.get('/api/slots/status', requireWeb, async (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1597,7 +1521,6 @@ app.get('/api/slots/status', requireWeb, async (req, res) => {
   res.json({ status });
 });
 
-// Monitor a specific slot's Minecraft server in real time.
 app.get('/api/slots/:n/status', requireWeb, async (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1607,7 +1530,6 @@ app.get('/api/slots/:n/status', requireWeb, async (req, res) => {
   res.json(await pingServer(server));
 });
 
-// Deep edit a slot's bot behavior (persona, script, AI, targeting, messaging).
 app.put('/api/slots/:n/config', requireWeb, (req, res) => {
   try {
     const sub = getSubscriber(req.web.email);
@@ -1616,7 +1538,6 @@ app.put('/api/slots/:n/config', requireWeb, (req, res) => {
     if (!Number.isInteger(n) || n < 0 || n >= sub.botSlots) {
       return res.status(400).json({ error: 'invalid slot index' });
     }
-    // Persist bot metadata (name, proxy, version, discord) in mcTokens
     const meta = req.body?.meta || {};
     if (meta.mcName !== undefined || meta.mcProxy !== undefined || meta.mcVersion !== undefined) {
       sub.mcTokens = sub.mcTokens || [];
@@ -1638,7 +1559,6 @@ app.put('/api/slots/:n/config', requireWeb, (req, res) => {
   }
 });
 
-// Manually boot a single slot's managed bot process.
 app.post('/api/slots/:n/start', requireWeb, (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1656,7 +1576,6 @@ app.post('/api/slots/:n/start', requireWeb, (req, res) => {
   res.json({ ok: true, online: !!supervisor.slotStatus(sub.email)[server] });
 });
 
-// Manually stop a single slot's managed bot process.
 app.post('/api/slots/:n/stop', requireWeb, (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1668,7 +1587,6 @@ app.post('/api/slots/:n/stop', requireWeb, (req, res) => {
   res.json({ ok: true });
 });
 
-// Start every configured bot slot for this subscriber.
 app.post('/api/slots/start-all', requireWeb, (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1689,7 +1607,6 @@ app.post('/api/slots/start-all', requireWeb, (req, res) => {
   res.json({ ok: true, started });
 });
 
-// Stop every running bot slot for this subscriber.
 app.post('/api/slots/stop-all', requireWeb, (req, res) => {
   const sub = getSubscriber(req.web.email);
   if (!sub || !sub.planId) return res.status(403).json({ error: 'no_active_plan' });
@@ -1700,10 +1617,6 @@ app.post('/api/slots/stop-all', requireWeb, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------------------------------------------------------------
-// Bridge + startup
-// ---------------------------------------------------------------
-// Start the LTC watcher; on payment, provision the subscription + sync bots.
 startWatcher({
   grant: (invoice) => {
     if (invoice.creditKind === 'credits') {
@@ -1719,7 +1632,6 @@ startWatcher({
   pollMs: Math.max(5000, config.supervisorPollMs || 10_000),
 });
 
-// Provision the demo subscriber + reconcile bots in dev.
 ensureDemoAccount();
 supervisor.sync();
 
@@ -1727,18 +1639,12 @@ createBotBridge(server, {
   onLeave: (p) => console.log('[bridge] bot session ended', p?.email),
 });
 
-// Resume records created through /api/bots after a process restart. The
-// manager staggers connections so a Railway redeploy does not hammer the
-// Minecraft services API all at once.
 void resumeEnabledBots();
 
-// Sweep paid invoice balances into the owner wallet (boot + 5 min cycle).
 startOwnerSweeper();
 
-// Auto-cancel stale pending invoices once on boot.
 cancelStaleInvoices();
 
-// Expire lapsed (custom-duration) subscriptions: boot + every 10 minutes.
 function expireAndSync() {
   const n = expireLapsedSubscribers();
   if (n) supervisor.sync();

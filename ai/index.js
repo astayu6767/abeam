@@ -1,13 +1,28 @@
 import crypto from 'node:crypto';
+import { config } from '../config.js';
 
 const GEMINI_URL_PREFIX = 'https://generativelanguage.googleapis.com/v1beta/models';
+const aiProviderLog = [];
 
-// ---------------------------------------------------------------
-// Keyword-based intent detection (fallback when no Gemini key).
-// The bot is a college tournament hustler: it wants the target to
-// join a "small private 1v1 bracket" Discord server where it will
-// "definitely win their money back".
-// ---------------------------------------------------------------
+function recordAiProvider(provider, ms) {
+  aiProviderLog.push({ provider, ms: Math.max(0, Number(ms) || 0) });
+  if (aiProviderLog.length > 50) aiProviderLog.splice(0, aiProviderLog.length - 50);
+}
+
+export function getAiProviderStats() {
+  const last = aiProviderLog[aiProviderLog.length - 1] || null;
+  const stats = { gemini: 0, fallback: 0, pollinations: 0, openrouter: 0, failed: 0 };
+  for (const entry of aiProviderLog) {
+    if (entry.provider in stats) stats[entry.provider] += 1;
+  }
+  return {
+    lastProvider: last?.provider || null,
+    ...stats,
+    lastLatencyMs: last?.ms || 0,
+    configured: !!(process.env.GEMINI_API_KEY || config.aiKey),
+  };
+}
+
 const DIRECTIVES = {
   tournament: /bracket|tournament|1v1|one v one|comp|scrim|wager|bet|money back|win back|private match/i,
   venue: /discord|copy me|add me|join.*(server|discord)|voice|call/i,
@@ -25,7 +40,6 @@ function detectDirectives(text = '') {
   return hits;
 }
 
-// A little "personality" state used to keyword-respond in character.
 function keywordReplies(intent, profile) {
   const s = profile?.stage || 'greet';
   if (intent.evade) {
@@ -46,11 +60,6 @@ function keywordReplies(intent, profile) {
   return "u down to run a quick 1v1? small stake, no big deal if not";
 }
 
-// ---------------------------------------------------------------
-// Gemini: the brains. Takes the play-by-play log + user message and
-// returns the bot's next line, staying in character as a friendly-ish
-// tournament hustler.
-// ---------------------------------------------------------------
 async function geminiReply(apiKey, log, userMessage, profile) {
   const model = (profile && profile.geminiModel) || 'gemini-2.0-flash';
   const url = `${GEMINI_URL_PREFIX}/${model}:generateContent?key=${apiKey}`;
@@ -100,23 +109,26 @@ async function geminiReply(apiKey, log, userMessage, profile) {
   return text.replace(/^YOU[: ]*/i, '').trim();
 }
 
-// ---------------------------------------------------------------
-// Public entry point: decides between Gemini and keyword fallback.
-// ---------------------------------------------------------------
 export async function generateReply(ctx, userMessage) {
   const profile = ctx.profile || {};
   const log = ctx.log || [];
   const apiKey = (profile.geminiKey || '').trim();
+  const started = Date.now();
 
   if (apiKey) {
     try {
-      return await geminiReply(apiKey, log, userMessage, profile);
+      const reply = await geminiReply(apiKey, log, userMessage, profile);
+      recordAiProvider('gemini', Date.now() - started);
+      return reply;
     } catch (err) {
+      recordAiProvider('failed', Date.now() - started);
       console.warn('[ai] gemini failed, falling back to keywords:', err.message);
     }
   }
 
   const intent = { _: detectDirectives(userMessage) };
   for (const d of intent._) intent[d] = true;
-  return keywordReplies(intent, profile);
+  const reply = keywordReplies(intent, profile);
+  recordAiProvider('fallback', Date.now() - started);
+  return reply;
 }
