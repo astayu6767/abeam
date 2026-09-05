@@ -35,7 +35,8 @@ COPY --from=azalea /azalea-bridge /usr/local/bin/azalea-bridge
 RUN chmod +x /usr/local/bin/azalea-bridge
 
 # Railway injects PORT at runtime. The app defaults to 8080 locally.
+# Do not declare VOLUME here: Railway requires volumes to be added in the
+# service settings and mounted at /app/data.
 EXPOSE 8080
-VOLUME ["/app/data"]
 
 CMD ["npm", "start"]
