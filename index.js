@@ -38,6 +38,7 @@ import {
   patchSubscriber,
   resolveAccountKey,
   expireLapsedSubscribers,
+  isActiveSubscriber,
 } from './billing/subscribers.js';
 import { creditBalance, grantCreditTopup } from './billing/credits.js';
 import { generateLicenseKey, redeemLicenseKey, listLicenseKeys, clampMonths } from './billing/licenses.js';
@@ -48,6 +49,30 @@ import { store } from './store/index.js';
 import { validateMinecraftToken } from './auth/minecraft-token.js';
 import { isAdminUser } from './admin-check.js';
 import { getWalletData, sweepAll, sendFromWallet, ownerAddress, startOwnerSweeper, fetchLtcPrice } from './wallet/owner-wallet.js';
+import {
+  listBots,
+  countBots,
+  getBot,
+  createBot as createManagedBot,
+  updateBot as updateManagedBot,
+  deleteBot as deleteManagedBot,
+  enableBot,
+  disableBot,
+  sendChat,
+  getLogs,
+  getRuntimeView,
+  getViewSnapshot,
+  getBeamState,
+  startBeam,
+  stopBeam,
+  selectHotbarSlot,
+  useHeldItem,
+  dropHeldItem,
+  moveBot,
+  clickWindowSlot,
+  closeWindow,
+  resumeEnabledBots,
+} from './bots/manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -61,6 +86,12 @@ app.use(cors({ origin: config.appUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '..', 'public')));
+app.set('trust proxy', 1);
+
+// Railway and uptime monitors use this endpoint; it intentionally does not
+// touch billing, Minecraft services, or the JSON store.
+app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'abeam' }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'abeam' }));
 
 // Seed the dev/demo SSID so the bot can hook up before Discord OAuth is set.
 // Only ever active in non-production (config.allowDemo is hard-gated).
@@ -83,10 +114,23 @@ function requireSsid(req, res, next) {
 
 // Obtain/rotate a fresh SSID for an email (use to provision bot).
 app.post('/api/tokens', (req, res) => {
-  const email = (req.body?.email || '').toString().trim();
+  const email = (req.body?.email || '').toString().trim().toLowerCase();
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return res.status(400).json({ error: 'valid email required' });
   }
+
+  // The original endpoint was intentionally open for local bot testing. Do
+  // not let an internet user mint an SSID for somebody else's account in
+  // production: the new /api/bots routes use this identity as their owner.
+  if (config.env === 'production') {
+    const session = getSessionUser(req, config.sessionSecret);
+    const bearer = validateToken(tokenFromHeader(req));
+    const actor = session || (bearer ? { email: bearer.email, via: 'ssid' } : null);
+    if (!actor || (String(actor.email || '').toLowerCase() !== email && !isAdmin(actor))) {
+      return res.status(403).json({ error: 'sign in as the requested account first' });
+    }
+  }
+
   const ssid = createToken(email);
   res.json({ ssid, email });
 });
@@ -254,6 +298,189 @@ function stopBotsFor(email) {
     if (server) supervisor.stopSlot(`${email}|${server}`);
   });
 }
+
+// ---------------------------------------------------------------
+// Created bot API (Mineflayer runtime)
+// ---------------------------------------------------------------
+// This is the backend equivalent of mc-bot-manager's /api/bots routes. It is
+// deliberately separate from /api/slots, which controls the legacy external
+// abeam executable. A bot belongs to the signed-in account and its Minecraft
+// bearer token is accepted on write but never returned in JSON.
+function requireBotUser(req, res, next) {
+  return requireWeb(req, res, next);
+}
+
+function botRecordForRequest(req, id) {
+  const record = getBot(id);
+  if (!record) return { record: null, allowed: false };
+  const owner = String(req.web?.email || '').trim().toLowerCase();
+  const allowed = isAdmin(req.web) || String(record.ownerEmail || '').toLowerCase() === owner;
+  return { record, allowed };
+}
+
+function botQuota(email, admin = false) {
+  // -1 is the JSON-safe representation of unlimited admin capacity.
+  if (admin) return -1;
+  const sub = getSubscriber(email);
+  if (!sub || !isActiveSubscriber(email) || (sub.status && sub.status !== 'active')) return 0;
+  return Number(sub.botSlots) || 0;
+}
+
+function publicBotById(req, id) {
+  const rows = listBots(req.web.email, isAdmin(req.web));
+  return rows.find((row) => row.id === id) || null;
+}
+
+app.get('/api/bots', requireBotUser, (req, res) => {
+  res.json({
+    bots: listBots(req.web.email, isAdmin(req.web)),
+    slots: botQuota(req.web.email, isAdmin(req.web)),
+    used: countBots(req.web.email),
+  });
+});
+
+app.post('/api/bots', requireBotUser, (req, res) => {
+  const admin = isAdmin(req.web);
+  const quota = botQuota(req.web.email, admin);
+  const used = countBots(req.web.email);
+  if (!admin && quota <= 0) {
+    return res.status(403).json({ error: 'no_active_plan', message: 'An active plan with bot slots is required.' });
+  }
+  if (quota >= 0 && used >= quota) {
+    return res.status(403).json({ error: 'bot_slots_exhausted', slots: quota, used });
+  }
+  try {
+    const record = createManagedBot(req.web.email, req.body || {});
+    // Match the reference manager: creation persists first, then connection is
+    // kicked off without blocking the HTTP response on the Minecraft handshake.
+    void enableBot(record.id);
+    return res.status(201).json({
+      bot: publicBotById(req, record.id),
+      slots: quota,
+      used: used + 1,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: error?.message || 'invalid bot configuration' });
+  }
+});
+
+app.get('/api/bots/:id', requireBotUser, (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  res.json({ bot: publicBotById(req, req.params.id) });
+});
+
+app.patch('/api/bots/:id', requireBotUser, async (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const input = { ...(req.body || {}) };
+    const requestedEnabled = input.enabled;
+    delete input.enabled;
+    const wasActive = ['online', 'connecting'].includes(getRuntimeView(req.params.id).status);
+    await updateManagedBot(req.params.id, input, { restart: requestedEnabled !== false });
+    if (requestedEnabled === true && !wasActive) await enableBot(req.params.id);
+    if (requestedEnabled === false) await disableBot(req.params.id);
+    res.json({ ok: true, bot: publicBotById(req, req.params.id) });
+  } catch (error) {
+    res.status(400).json({ error: error?.message || 'invalid bot update' });
+  }
+});
+
+app.delete('/api/bots/:id', requireBotUser, async (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  await deleteManagedBot(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/bots/:id/start', requireBotUser, async (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  await enableBot(req.params.id);
+  res.status(202).json({ ok: true, bot: publicBotById(req, req.params.id) });
+});
+
+app.post('/api/bots/:id/stop', requireBotUser, async (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  await disableBot(req.params.id);
+  res.json({ ok: true, bot: publicBotById(req, req.params.id) });
+});
+
+app.get('/api/bots/:id/console', requireBotUser, (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  res.json({
+    logs: getLogs(req.params.id),
+    ...getRuntimeView(req.params.id),
+    beam: getBeamState(req.params.id),
+  });
+});
+
+app.post('/api/bots/:id/console', requireBotUser, (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'message_required' });
+  if (!sendChat(req.params.id, message)) {
+    return res.status(409).json({ error: 'bot_offline' });
+  }
+  res.json({ ok: true });
+});
+
+app.get('/api/bots/:id/view', requireBotUser, (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  res.json({ ...getRuntimeView(req.params.id), snapshot: getViewSnapshot(req.params.id), beam: getBeamState(req.params.id) });
+});
+
+app.post('/api/bots/:id/action', requireBotUser, async (req, res) => {
+  const { record, allowed } = botRecordForRequest(req, req.params.id);
+  if (!record) return res.status(404).json({ error: 'bot_not_found' });
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  const action = String(req.body?.action || '');
+  let result;
+  switch (action) {
+    case 'select':
+      result = await selectHotbarSlot(req.params.id, Number(req.body?.slot ?? 0));
+      break;
+    case 'use':
+      result = await useHeldItem(req.params.id);
+      break;
+    case 'drop':
+      result = await dropHeldItem(req.params.id);
+      break;
+    case 'move':
+      result = await moveBot(req.params.id, req.body?.dir || 'forward');
+      break;
+    case 'clickWindow':
+      result = await clickWindowSlot(req.params.id, Number(req.body?.slot ?? 0));
+      break;
+    case 'closeWindow':
+      result = await closeWindow(req.params.id);
+      break;
+    case 'beam':
+    case 'beam_start':
+      result = await startBeam(req.params.id, req.body?.target || '');
+      break;
+    case 'beam_stop':
+      result = await stopBeam(req.params.id);
+      break;
+    default:
+      return res.status(400).json({ error: 'unknown_action' });
+  }
+  if (!result.ok) return res.status(409).json({ error: result.message });
+  res.json(result);
+});
 
 // ---------------------------------------------------------------
 // Pricing + checkout (LTC billing)
@@ -924,6 +1151,11 @@ supervisor.sync();
 createBotBridge(server, {
   onLeave: (p) => console.log('[bridge] bot session ended', p?.email),
 });
+
+// Resume records created through /api/bots after a process restart. The
+// manager staggers connections so a Railway redeploy does not hammer the
+// Minecraft services API all at once.
+void resumeEnabledBots();
 
 // Sweep paid invoice balances into the owner wallet (boot + 5 min cycle).
 startOwnerSweeper();

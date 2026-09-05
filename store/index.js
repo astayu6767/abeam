@@ -50,6 +50,12 @@ export const store = {
     all: () => load('subscribers.json', {}),
     save: (s) => save('subscribers.json', s),
   },
+  // Persisted bot definitions. Runtime connections and logs live in memory;
+  // enabled records are resumed when the service starts.
+  bots: {
+    all: () => load('bots.json', []),
+    save: (b) => save('bots.json', b),
+  },
   licenses: {
     all: () => load('licenses.json', []),
     save: (l) => save('licenses.json', l),

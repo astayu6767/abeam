@@ -1,10 +1,12 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+const port = Number(process.env.PORT || 8080);
+
 export const config = {
   env: process.env.NODE_ENV || 'development',
-  port: Number(process.env.PORT || 8080),
-  appUrl: (process.env.APP_URL || 'http://localhost:8080').replace(/\/$/, ''),
+  port,
+  appUrl: (process.env.APP_URL || `http://localhost:${port}`).replace(/\/$/, ''),
 
   // Discord OAuth (website login).
   discordClientId: process.env.DISCORD_CLIENT_ID || '',
@@ -27,9 +29,11 @@ export const config = {
   invoiceGraceMs: Number(process.env.INVOICE_GRACE_HOURS || 24) * 3_600_000,
 
   // Fully-managed cloud bots (VPS). abeam.exe path + poll cadence.
-  botExe: process.env.BOT_EXE || '', // e.g. C:/Users/Achvit/abeam/bot/target/release/abeam.exe
-  backendWsUrl: process.env.BACKEND_WS_URL || 'ws://127.0.0.1:8080/ws/bot',
+  botExe: process.env.BOT_EXE || '', // legacy managed executable for the /api/slots API
+  backendWsUrl: process.env.BACKEND_WS_URL || `ws://127.0.0.1:${port}/ws/bot`,
   supervisorPollMs: Number(process.env.SUPERVISOR_POLL_MS || 5000),
+  // Self-contained /api/bots connections (bots/manager.js).
+  botConnectionTimeoutMs: Number(process.env.BOT_CONNECTION_TIMEOUT_MS || 45_000),
 
   // Beam AI: the operator holds the central API key; members only spend credits.
   aiKey: (process.env.AI_API_KEY || '').trim(),
