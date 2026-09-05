@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=ui2">
 </head>
 <body>
   <div class="bg" aria-hidden="true">
@@ -109,7 +109,7 @@
             <div class="stat-row"><div class="stat"><span class="stat-label">Plan</span><strong class="stat-value" id="stat-plan">—</strong></div><div class="stat"><span class="stat-label">Bot slots</span><strong class="stat-value" id="stat-slots">—</strong></div><div class="stat"><span class="stat-label">Servers</span><strong class="stat-value" id="stat-servers">—</strong></div><div class="stat"><span class="stat-label">Targets engaged</span><strong class="stat-value" id="stat-targets">0</strong></div></div>
             <div id="bot-lock" class="notice notice-warn" hidden>🔒 No active license. Pick a plan to unlock your managed fleet.</div>
             <ul id="bot-list" class="slot-list"></ul>
-            <div id="console-wrap" class="console" hidden><div class="console-head"><span class="rec"><i></i> live</span><span id="console-title" class="console-title">bot console</span><div id="console-tabs" class="console-tabs"></div><button class="icon-btn" id="console-close">×</button></div><div id="console-panes" class="console-body"></div><form id="console-form" class="console-input"><input id="console-message" placeholder="Send a chat message…"><button class="btn btn-primary">Send</button></form></div>
+            <div id="console-wrap" class="console" hidden><div class="console-head"><span class="rec"><i></i> live</span><span id="console-title" class="console-title">bot console</span><div id="console-quick-actions" class="console-quick-actions"><button class="console-quick" data-console-quick="hey">hey</button><button class="console-quick" data-console-quick="gg">gg</button></div><div id="console-tabs" class="console-tabs"></div><button class="icon-btn" id="console-close">×</button></div><div id="console-panes" class="console-body"></div><form id="console-form" class="console-input"><input id="console-message" placeholder="Send a chat message…"><button class="btn btn-primary">Send</button></form></div>
           </section>
 
           <section id="panel-license" class="panel-page" hidden>
@@ -143,6 +143,6 @@
 
   <div id="inventorymodal" class="modal-overlay" hidden><div class="modal inventory-modal"><button class="modal-close" id="inventory-close">×</button><h3 id="inventory-title">Inventory</h3><p id="inventory-status" class="sub">View the live hotbar and open GUI.</p><div id="inventory-grid" class="inv-grid"></div><div id="inventory-window" class="inventory-window" hidden><div class="cfg-header">Open GUI</div><div id="inventory-window-grid" class="inv-grid"></div></div><div class="modal-actions"><button class="btn btn-ghost" id="inventory-refresh">↻ Refresh</button><button class="btn btn-primary" id="inventory-done">Done</button></div></div></div>
 
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=ui2" defer></script>
 </body>
 </html>

@@ -42,6 +42,13 @@
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
+  function cleanConsoleLine(value) {
+    return String(value ?? '')
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\[[0-9;?]*m/g, '')
+      .replace(/\r/g, '');
+  }
+
   function toast(message, timeout = 3000) {
     const node = $('toast');
     node.textContent = message;
@@ -304,11 +311,15 @@
       const online = botOnline(bot);
       const status = bot.status || 'offline';
       const username = bot.username || bot.minecraftUsername || 'Minecraft account pending';
+      const rawUsername = bot.username || bot.minecraftUsername || '';
+      const statusLabel = online ? (status === 'connecting' ? 'Connecting' : 'Joined') : (status === 'error' ? 'Failed' : 'Stopped');
+      const statusClass = status === 'connecting' ? 'connecting' : online ? 'online' : 'offline';
       const avatar = online ? '⚔' : '◈';
+      const avatarImage = rawUsername ? `<img class="mc-avatar-image" src="https://visage.surgeplay.com/bust/256/${encodeURIComponent(rawUsername)}?y=-40" alt="" loading="lazy" onerror="this.style.display='none'">` : '';
       return `<li class="bot-card ${online ? 'on' : ''}" data-bot-id="${escapeHtml(bot.id)}">
-        <div class="bot-left"><div class="mc-avatar" aria-hidden="true">${avatar}</div><div class="bot-meta">
-          <div class="bot-title"><span>${escapeHtml(bot.name || `Bot ${index + 1}`)}</span><code>${escapeHtml(username)}</code><span class="bot-engine">${escapeHtml((bot.engine || 'azalea').toUpperCase())}</span></div>
-          <div class="bot-sub"><span class="dot ${online ? 'dot-on' : 'dot-off'}"></span><span class="${online ? 'bot-online' : 'bot-offline'}">${escapeHtml(status)}</span><span>·</span><span>${escapeHtml(bot.host || 'server not set')}:${escapeHtml(bot.port || '25565')}</span>${bot.proxyConfigured ? '<span class="bot-chip">proxy</span>' : ''}${bot.antiAfk ? '<span class="bot-chip">anti-AFK on</span>' : '<span class="bot-chip">anti-AFK off</span>'}${bot.beamLogging ? '<span class="bot-chip">logging</span>' : ''}${bot.aiRephrasing ? '<span class="bot-chip">beam ai</span>' : ''}</div>
+        <div class="bot-left"><div class="mc-avatar" aria-hidden="true"><span class="avatar-fallback">${avatar}</span>${avatarImage}</div><div class="bot-meta">
+          <div class="bot-title"><span>${escapeHtml(bot.name || `Bot ${index + 1}`)}</span><code>${escapeHtml(username)}</code><span class="bot-status-pill ${statusClass}"><i></i>${statusLabel}</span><span class="bot-engine">${escapeHtml((bot.engine || 'azalea').toUpperCase())}</span></div>
+          <div class="bot-sub"><span>${escapeHtml(bot.host || 'server not set')}:${escapeHtml(bot.port || '25565')}</span>${bot.version && bot.version !== 'auto' ? `<span class="bot-chip">${escapeHtml(bot.version)}</span>` : '<span class="bot-chip">auto</span>'}${bot.proxyConfigured ? '<span class="bot-chip">proxy</span>' : ''}${bot.antiAfk ? '<span class="bot-chip">anti-AFK on</span>' : '<span class="bot-chip">anti-AFK off</span>'}${bot.beamLogging ? '<span class="bot-chip">logging</span>' : ''}${bot.aiRephrasing ? '<span class="bot-chip">beam ai</span>' : ''}</div>
         </div></div>
         <div class="bot-actions"><button class="btn btn-ghost" data-bot-action="console">Console</button><button class="btn btn-ghost" data-bot-action="inventory">Inventory</button><button class="btn btn-ghost" data-bot-action="afk">AFK ${bot.antiAfk ? 'on' : 'off'}</button><button class="btn ${online ? 'btn-ghost' : 'btn-primary'}" data-bot-action="${online ? 'stop' : 'start'}">${online ? 'Stop' : 'Start'}</button><button class="btn btn-ghost" data-bot-action="edit">Configure</button><button class="icon-btn" title="Delete bot" data-bot-action="delete">×</button></div>
       </li>`;
@@ -452,6 +463,19 @@
     return { name: item.name || item.displayName || item.type || '', count: Number(item.count || item.amount || 0) };
   }
 
+  function inventoryGlyph(name) {
+    const value = String(name || '').toLowerCase();
+    if (value.includes('sword')) return '⚔';
+    if (value.includes('pickaxe') || value.includes('axe') || value.includes('shovel')) return '⛏';
+    if (value.includes('bow') || value.includes('crossbow')) return '⌁';
+    if (value.includes('diamond')) return '◆';
+    if (value.includes('iron')) return '⬢';
+    if (value.includes('gold')) return '✦';
+    if (value.includes('apple') || value.includes('food') || value.includes('bread')) return '●';
+    if (value.includes('totem')) return '✧';
+    return '✹';
+  }
+
   function renderInventory(data, bot) {
     const snapshot = data?.snapshot || data || {};
     const hotbar = Array.isArray(snapshot.hotbar) ? snapshot.hotbar : [];
@@ -464,7 +488,7 @@
       return Array.from({ length: count }, (_, index) => {
         const item = inventoryItem(items[index]);
         const filled = !!item.name;
-        return `<button class="inv-slot ${filled ? 'filled' : ''}" data-inventory-kind="${kind}" data-inventory-slot="${index}" title="${escapeHtml(item.name || 'Empty slot')}">${filled ? escapeHtml(item.name.slice(0, 12)) : '·'}${filled && item.count ? `<span class="inv-count">×${item.count}</span>` : ''}</button>`;
+        return `<button class="inv-slot ${filled ? 'filled' : ''}" data-inventory-kind="${kind}" data-inventory-slot="${index}" title="${escapeHtml(item.name || 'Empty slot')}">${filled ? `<span class="inv-glyph">${inventoryGlyph(item.name)}</span><span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>` : '<span class="inv-empty">·</span>'}${filled && item.count ? `<span class="inv-count">×${item.count}</span>` : ''}</button>`;
       }).join('');
     };
     $('inventory-grid').innerHTML = renderSlots(hotbar, 'hotbar');
@@ -554,9 +578,10 @@
       const data = await api(`/api/bots/${encodeURIComponent(id)}/console`);
       const logs = Array.isArray(data.logs) ? data.logs : [];
       $('console-panes').innerHTML = logs.length ? logs.map((entry) => {
-        const line = typeof entry === 'string' ? entry : (entry.line || entry.message || '');
+        const line = cleanConsoleLine(typeof entry === 'string' ? entry : (entry.line || entry.message || ''));
         const level = typeof entry === 'object' ? (entry.level || 'system') : 'system';
-        return `<div class="console-line"><span class="time">${escapeHtml(formatTime(entry.ts || entry.time))}</span><span class="who-${level === 'error' ? 'target' : 'system'}">${escapeHtml(level)}</span>${escapeHtml(line)}</div>`;
+        const speakerClass = level === 'error' ? 'target' : level === 'chat' ? 'bot' : 'system';
+        return `<div class="console-line"><span class="time">${escapeHtml(formatTime(entry.ts || entry.time))}</span><span class="who-${speakerClass}">${escapeHtml(level)}</span>${escapeHtml(line)}</div>`;
       }).join('') : '<div class="console-placeholder">No console lines yet. Start the bot to see its Azalea connection log.</div>';
       const body = $('console-panes');
       if (body) body.scrollTop = body.scrollHeight;
@@ -573,6 +598,14 @@
     try {
       await api(`/api/bots/${encodeURIComponent(state.activeBotId)}/console`, { method: 'POST', body: { message } });
       input.value = '';
+      await loadConsole(state.activeBotId);
+    } catch (error) { toast(error.message); }
+  }
+
+  async function sendQuickConsoleMessage(message) {
+    if (!state.activeBotId || !message) return;
+    try {
+      await api(`/api/bots/${encodeURIComponent(state.activeBotId)}/console`, { method: 'POST', body: { message } });
       await loadConsole(state.activeBotId);
     } catch (error) { toast(error.message); }
   }
@@ -778,6 +811,7 @@
     $('btn-stop-all')?.addEventListener('click', () => allBots('stop'));
     $('console-close')?.addEventListener('click', closeConsole);
     $('console-form')?.addEventListener('submit', sendConsoleMessage);
+    all('[data-console-quick]').forEach((button) => button.addEventListener('click', () => sendQuickConsoleMessage(button.dataset.consoleQuick)));
     $('inventory-refresh')?.addEventListener('click', () => state.activeBotId && loadInventory(state.activeBotId));
     all('#inventory-grid, #inventory-window-grid').forEach((grid) => grid.addEventListener('click', (event) => { const slot = event.target.closest('[data-inventory-slot]'); if (slot) inventoryAction(slot.dataset.inventoryKind, slot.dataset.inventorySlot); }));
     $('btn-redeem')?.addEventListener('click', redeemLicense);
