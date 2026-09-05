@@ -319,7 +319,7 @@
       const statusLabel = online ? (status === 'connecting' ? 'Connecting' : 'Joined') : (status === 'error' ? 'Failed' : 'Stopped');
       const statusClass = status === 'connecting' ? 'connecting' : online ? 'online' : 'offline';
       const avatar = online ? '⚔' : '◈';
-      const avatarImage = rawUsername ? `<img class="mc-avatar-image" src="https://visage.surgeplay.com/bust/256/${encodeURIComponent(rawUsername)}?y=-40" alt="" loading="lazy" onerror="this.style.display='none'">` : '';
+      const avatarImage = rawUsername ? `<img class="mc-avatar-image" src="https://mc-heads.net/avatar/${encodeURIComponent(rawUsername)}/64" alt="" loading="lazy" onerror="this.style.display='none'">` : '';
       return `<li class="bot-card ${online ? 'on' : ''}" data-bot-id="${escapeHtml(bot.id)}">
         <div class="bot-left"><div class="mc-avatar" aria-hidden="true"><span class="avatar-fallback">${avatar}</span>${avatarImage}</div><div class="bot-meta">
           <div class="bot-title"><span>${escapeHtml(bot.name || `Bot ${index + 1}`)}</span><code>${escapeHtml(username)}</code><span class="bot-status-pill ${statusClass}"><i></i>${statusLabel}</span><span class="bot-engine">${escapeHtml((bot.engine || 'azalea').toUpperCase())}</span></div>
@@ -585,7 +585,7 @@
     statusNode.className = `bot-status-pill ${statusClass}`;
     statusNode.innerHTML = `<i></i>${statusLabel}`;
     $('detail-avatar').innerHTML = rawUsername
-      ? `<span class="avatar-fallback">⚔</span><img class="mc-avatar-image" src="https://visage.surgeplay.com/bust/256/${encodeURIComponent(rawUsername)}?y=-40" alt="" loading="lazy" onerror="this.style.display='none'">`
+      ? `<span class="avatar-fallback">⚔</span><img class="mc-avatar-image" src="https://mc-heads.net/avatar/${encodeURIComponent(rawUsername)}/64" alt="" loading="lazy" onerror="this.style.display='none'">`
       : '<span class="avatar-fallback">⚔</span>';
     $('detail-toggle').textContent = online ? 'Stop bot' : 'Start bot';
     $('detail-toggle').classList.toggle('btn-primary', !online);
