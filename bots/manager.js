@@ -661,8 +661,12 @@ function attachAzalea(runtime, record, profile) {
     onSnapshot: (snapshot) => {
       runtime.azaleaSnap = snapshot;
     },
-    onPlayerAdded: (name) => log(runtime, 'system', `${name} joined`),
-    onPlayerRemoved: (name) => log(runtime, 'system', `${name} left`),
+    // Tab-list churn is extremely noisy on proxy networks and some servers
+    // send malformed formatting codes as player names. The UI already shows
+    // the useful spawn/join state, so do not flood the console with every
+    // player add/remove packet.
+    onPlayerAdded: () => {},
+    onPlayerRemoved: () => {},
     onError: (message) => {
       if (!runtime.manualStop) {
         runtime.lastError = clampText(message, 1000);

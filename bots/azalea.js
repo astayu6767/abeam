@@ -12,16 +12,11 @@ import readline from 'node:readline';
  * makes the runtime engine replaceable without changing the HTTP API.
  */
 
-const noisyLines = new Set();
-
 function filterAzaleaLog(line) {
   const lower = String(line).toLowerCase();
-  if (lower.includes('error reading packet') || lower.includes('failed to fill whole buffer')) {
-    if (noisyLines.has(line)) return true;
-    if (noisyLines.size > 400) noisyLines.clear();
-    noisyLines.add(line);
-    return false;
-  }
+  // These are protocol-parser chatter from busy/proxy servers, not operator
+  // events. Keep them out of both the in-memory log and the dashboard console.
+  if (lower.includes('error reading packet') || lower.includes('failed to fill whole buffer')) return true;
   return [
     'more than 1,000 items',
     'packet-event',

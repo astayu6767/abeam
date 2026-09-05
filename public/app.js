@@ -18,6 +18,9 @@
     invoiceTimer: null,
     invoiceCountdown: null,
     botTimer: null,
+    detailTimer: null,
+    detailTab: 'console',
+    detailView: null,
     authMode: 'login',
   };
 
@@ -46,6 +49,7 @@
     return String(value ?? '')
       .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
       .replace(/\[[0-9;?]*m/g, '')
+      .replace(/§[0-9A-FK-OR]/gi, '')
       .replace(/\r/g, '');
   }
 
@@ -539,7 +543,11 @@
     const bot = state.bots.find((item) => item.id === id);
     if (!bot) return;
     if (action === 'console') return openConsole(id);
-    if (action === 'inventory') return openInventory(id);
+    if (action === 'inventory') {
+      openBotDetail(id);
+      setDetailTab('screen');
+      return;
+    }
     if (action === 'afk') return toggleAntiAfk(id);
     if (action === 'edit') return openEditBot(bot);
     if (action === 'delete') {
@@ -555,28 +563,98 @@
     } catch (error) { toast(error.message); }
   }
 
+  function setFleetView(detail) {
+    const panel = $('panel-bots');
+    panel?.querySelector(':scope > .panel-head')?.toggleAttribute('hidden', detail);
+    panel?.querySelector(':scope > .fleet-actions')?.toggleAttribute('hidden', detail);
+    panel?.querySelector(':scope > .stat-row')?.toggleAttribute('hidden', detail);
+    if ($('bot-lock')) $('bot-lock').hidden = detail || state.slots !== 0 || state.user?.role === 'admin';
+    $('bot-list').hidden = detail;
+  }
+
+  function renderDetailHeader(bot) {
+    if (!bot) return;
+    const online = botOnline(bot);
+    const status = bot.status || 'offline';
+    const statusLabel = online ? (status === 'connecting' ? 'Connecting' : 'Joined') : (status === 'error' ? 'Failed' : 'Stopped');
+    const statusClass = status === 'connecting' ? 'connecting' : online ? 'online' : 'offline';
+    const rawUsername = bot.username || bot.minecraftUsername || '';
+    $('detail-name').textContent = bot.name || 'Bot';
+    $('detail-meta').textContent = `${bot.host || 'server'}:${bot.port || 25565} · ${rawUsername || 'Minecraft account pending'} · ${(bot.engine || 'azalea').toUpperCase()}`;
+    const statusNode = $('detail-status');
+    statusNode.className = `bot-status-pill ${statusClass}`;
+    statusNode.innerHTML = `<i></i>${statusLabel}`;
+    $('detail-avatar').innerHTML = rawUsername
+      ? `<span class="avatar-fallback">⚔</span><img class="mc-avatar-image" src="https://visage.surgeplay.com/bust/256/${encodeURIComponent(rawUsername)}?y=-40" alt="" loading="lazy" onerror="this.style.display='none'">`
+      : '<span class="avatar-fallback">⚔</span>';
+    $('detail-toggle').textContent = online ? 'Stop bot' : 'Start bot';
+    $('detail-toggle').classList.toggle('btn-primary', !online);
+    $('detail-toggle').classList.toggle('btn-ghost', online);
+    $('console-title').textContent = `${bot.name || 'bot'} console`;
+    $('console-tabs').innerHTML = `<button class="console-tab active">${escapeHtml(bot.name || 'bot')}</button>`;
+  }
+
+  function setDetailTab(tab) {
+    state.detailTab = tab === 'screen' ? 'screen' : 'console';
+    all('[data-detail-tab]').forEach((button) => button.classList.toggle('active', button.dataset.detailTab === state.detailTab));
+    $('detail-console-panel').hidden = state.detailTab !== 'console';
+    $('detail-screen-panel').hidden = state.detailTab !== 'screen';
+    if (state.detailTab === 'screen') loadView(state.activeBotId);
+    else loadConsole(state.activeBotId);
+  }
+
   function closeConsole() {
+    window.clearInterval(state.detailTimer);
+    state.detailTimer = null;
     state.activeBotId = null;
+    state.detailView = null;
     $('console-wrap').hidden = true;
     $('console-panes').innerHTML = '';
     $('console-tabs').innerHTML = '';
+    setFleetView(false);
+  }
+
+  function openBotDetail(id) {
+    const bot = state.bots.find((item) => item.id === id);
+    if (!bot) return;
+    state.activeBotId = id;
+    state.detailTab = 'console';
+    setFleetView(true);
+    $('console-wrap').hidden = false;
+    renderDetailHeader(bot);
+    setDetailTab('console');
+    window.clearInterval(state.detailTimer);
+    state.detailTimer = window.setInterval(() => {
+      if (!state.activeBotId) return;
+      renderDetailHeader(state.bots.find((item) => item.id === state.activeBotId));
+      if (state.detailTab === 'screen') loadView(state.activeBotId);
+      else loadConsole(state.activeBotId);
+    }, state.detailTab === 'screen' ? 800 : 1500);
+    $('console-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   async function openConsole(id) {
-    state.activeBotId = id;
-    $('console-wrap').hidden = false;
-    const bot = state.bots.find((item) => item.id === id);
-    $('console-title').textContent = `${bot?.name || 'bot'} console`;
-    $('console-tabs').innerHTML = `<button class="console-tab active">${escapeHtml(bot?.name || id.slice(0, 8))}</button>`;
-    await loadConsole(id);
-    $('console-wrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    openBotDetail(id);
+  }
+
+  function usefulConsoleLine(entry, bot) {
+    const raw = typeof entry === 'string' ? entry : (entry?.line || entry?.message || '');
+    const line = String(raw);
+    const lower = line.toLowerCase();
+    if (!line.trim()) return false;
+    if (line.includes('§')) return false;
+    if (['more than 1,000 items', 'packet-event', 'error reading packet', 'explode (id 36)', 'failed to fill whole buffer', 'packet explode', 'azalea_client::plugins::connection'].some((part) => lower.includes(part))) return false;
+    if (/\b(joined|left)\b/.test(lower) && !/(azalea|spawned|logged in|disconnected|connected)/.test(lower)) return false;
+    if (bot?.username && lower.includes(`${String(bot.username).toLowerCase()} joined`) && !lower.includes('azalea')) return false;
+    return true;
   }
 
   async function loadConsole(id) {
     if (!id || state.activeBotId !== id) return;
     try {
       const data = await api(`/api/bots/${encodeURIComponent(id)}/console`);
-      const logs = Array.isArray(data.logs) ? data.logs : [];
+      const bot = state.bots.find((item) => item.id === id);
+      const logs = (Array.isArray(data.logs) ? data.logs : []).filter((entry) => usefulConsoleLine(entry, bot));
       $('console-panes').innerHTML = logs.length ? logs.map((entry) => {
         const line = cleanConsoleLine(typeof entry === 'string' ? entry : (entry.line || entry.message || ''));
         const level = typeof entry === 'object' ? (entry.level || 'system') : 'system';
@@ -588,6 +666,98 @@
     } catch (error) {
       $('console-panes').innerHTML = `<div class="console-placeholder">${escapeHtml(error.message)}</div>`;
     }
+  }
+
+  function renderGameView(data, bot) {
+    const snapshot = data?.snapshot || { available: false };
+    const available = snapshot.available !== false;
+    $('game-view-empty').hidden = available;
+    $('game-view-online').hidden = !available;
+    if (!available) return;
+
+    const health = Math.max(0, Math.min(20, Number(snapshot.health ?? 20)));
+    const food = Math.max(0, Math.min(20, Number(snapshot.food ?? 20)));
+    $('game-health').textContent = `${health.toFixed(0)} / 20`;
+    $('game-food').textContent = `${food.toFixed(0)} / 20`;
+    $('health-meter').style.width = `${health * 5}%`;
+    $('food-meter').style.width = `${food * 5}%`;
+    $('game-held').textContent = snapshot.heldItem || 'Empty';
+    $('game-facing').textContent = snapshot.facing || 'N';
+    const position = snapshot.position || {};
+    $('game-location').textContent = `${Number(position.x || 0).toFixed(1)}, ${Number(position.y || 0).toFixed(1)}, ${Number(position.z || 0).toFixed(1)} · ${snapshot.dimension || 'overworld'}`;
+
+    const entities = Array.isArray(snapshot.entities) ? snapshot.entities : [];
+    $('game-entity-count').textContent = String(entities.length);
+    $('nearby-entities').innerHTML = entities.length ? entities.map((entity) => {
+      const kind = entity.kind === 'mob' ? 'mob' : 'player';
+      const name = entity.name || entity.displayName || kind;
+      const distance = entity.distance ?? (entity.position ? Math.round(Math.hypot(Number(entity.position.x || 0), Number(entity.position.z || 0))) : '—');
+      return `<div class="nearby-row ${kind}"><span><b></b><strong>${escapeHtml(name)}</strong></span><em>${escapeHtml(distance)}m</em></div>`;
+    }).join('') : '<span class="game-muted">No nearby entities.</span>';
+
+    const radar = $('radar-entities');
+    radar.innerHTML = entities.map((entity) => {
+      const dx = Number(entity.right ?? entity.position?.x ?? 0);
+      const dz = Number(entity.forward ?? entity.position?.z ?? 0);
+      const left = Math.max(5, Math.min(95, 50 + dx / 32 * 45));
+      const top = Math.max(5, Math.min(95, 50 - dz / 32 * 45));
+      const kind = entity.kind === 'mob' ? 'mob' : entity.kind === 'object' ? 'object' : 'player';
+      return `<span class="radar-dot ${kind}" style="left:${left}%;top:${top}%" title="${escapeHtml(entity.name || kind)}"></span>`;
+    }).join('');
+
+    const hotbar = Array.isArray(snapshot.hotbar) ? snapshot.hotbar : [];
+    $('detail-hotbar').innerHTML = Array.from({ length: 9 }, (_, index) => {
+      const item = inventoryItem(hotbar[index]);
+      const filled = !!item.name;
+      const selected = hotbar[index]?.selected === true || Number(snapshot.selectedSlot) === index;
+      return `<button class="inv-slot ${filled ? 'filled' : ''} ${selected ? 'selected' : ''}" data-detail-hotbar-slot="${index}" title="${escapeHtml(item.name || 'Empty slot')}"><span class="slot-number">${index + 1}</span>${filled ? `<span class="inv-glyph">${inventoryGlyph(item.name)}</span><span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>${item.count > 1 ? `<span class="inv-count">×${item.count}</span>` : ''}` : '<span class="inv-empty">·</span>'}</button>`;
+    }).join('');
+
+    const openWindow = snapshot.window && Array.isArray(snapshot.window.slots);
+    $('detail-gui').hidden = !openWindow;
+    if (openWindow) {
+      $('detail-gui-title').textContent = snapshot.window.title || 'Open container';
+      $('detail-gui-grid').innerHTML = snapshot.window.slots.map((entry, index) => {
+        const item = inventoryItem(entry);
+        const filled = !!item.name;
+        const slot = Number(entry?.slot ?? index);
+        return `<button class="inv-slot ${filled ? 'filled' : ''}" data-detail-gui-slot="${slot}" title="${escapeHtml(item.name || 'Empty slot')}">${filled ? `<span class="inv-glyph">${inventoryGlyph(item.name)}</span><span class="inv-name">${escapeHtml(item.name.replace(/^minecraft:/, '').replaceAll('_', ' ').slice(0, 12))}</span>${item.count > 1 ? `<span class="inv-count">×${item.count}</span>` : ''}` : '<span class="inv-empty">·</span>'}</button>`;
+      }).join('');
+    }
+    $('hotbar-hint').textContent = `${bot?.name || 'Bot'} · click to select · use to open a GUI`;
+  }
+
+  async function loadView(id) {
+    if (!id || state.activeBotId !== id) return;
+    try {
+      const data = await api(`/api/bots/${encodeURIComponent(id)}/view`);
+      state.detailView = data;
+      renderGameView(data, state.bots.find((item) => item.id === id));
+    } catch (error) {
+      $('game-view-empty').hidden = false;
+      $('game-view-online').hidden = true;
+      $('game-empty-icon').textContent = '×';
+    }
+  }
+
+  async function detailAction(action, payload = {}) {
+    if (!state.activeBotId) return;
+    try {
+      await api(`/api/bots/${encodeURIComponent(state.activeBotId)}/action`, { method: 'POST', body: { action, ...payload } });
+      await loadView(state.activeBotId);
+    } catch (error) { toast(error.message); }
+  }
+
+  async function toggleDetailBot() {
+    const bot = state.bots.find((item) => item.id === state.activeBotId);
+    if (!bot) return;
+    const action = botOnline(bot) ? 'stop' : 'start';
+    try {
+      await api(`/api/bots/${encodeURIComponent(bot.id)}/${action}`, { method: 'POST' });
+      await loadBots(true);
+      renderDetailHeader(state.bots.find((item) => item.id === bot.id));
+      if (state.detailTab === 'screen') await loadView(bot.id);
+    } catch (error) { toast(error.message); }
   }
 
   async function sendConsoleMessage(event) {
@@ -810,6 +980,20 @@
     $('btn-start-all')?.addEventListener('click', () => allBots('start'));
     $('btn-stop-all')?.addEventListener('click', () => allBots('stop'));
     $('console-close')?.addEventListener('click', closeConsole);
+    $('detail-back')?.addEventListener('click', closeConsole);
+    $('detail-configure')?.addEventListener('click', () => {
+      const bot = state.bots.find((item) => item.id === state.activeBotId);
+      if (bot) openEditBot(bot);
+    });
+    $('detail-toggle')?.addEventListener('click', toggleDetailBot);
+    all('[data-detail-tab]').forEach((button) => button.addEventListener('click', () => setDetailTab(button.dataset.detailTab)));
+    $('detail-use')?.addEventListener('click', () => detailAction('use'));
+    $('detail-drop')?.addEventListener('click', () => detailAction('drop'));
+    $('detail-refresh-view')?.addEventListener('click', () => loadView(state.activeBotId));
+    $('detail-gui-close')?.addEventListener('click', () => detailAction('closeWindow'));
+    all('[data-detail-move]').forEach((button) => button.addEventListener('click', () => detailAction('move', { dir: button.dataset.detailMove })));
+    $('detail-hotbar')?.addEventListener('click', (event) => { const slot = event.target.closest('[data-detail-hotbar-slot]'); if (slot) detailAction('select', { slot: Number(slot.dataset.detailHotbarSlot) }); });
+    $('detail-gui-grid')?.addEventListener('click', (event) => { const slot = event.target.closest('[data-detail-gui-slot]'); if (slot) detailAction('clickWindow', { slot: Number(slot.dataset.detailGuiSlot) }); });
     $('console-form')?.addEventListener('submit', sendConsoleMessage);
     all('[data-console-quick]').forEach((button) => button.addEventListener('click', () => sendQuickConsoleMessage(button.dataset.consoleQuick)));
     $('inventory-refresh')?.addEventListener('click', () => state.activeBotId && loadInventory(state.activeBotId));
