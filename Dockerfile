@@ -29,8 +29,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Next builds the reference dashboard with its dev toolchain; prune only after
+# the build so the production image contains the runtime dependencies too.
+RUN npm ci
 COPY . .
+RUN npm run build && npm prune --omit=dev && npm cache clean --force
 COPY --from=azalea /azalea-bridge /usr/local/bin/azalea-bridge
 RUN chmod +x /usr/local/bin/azalea-bridge
 

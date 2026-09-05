@@ -222,7 +222,7 @@ export function buildBotConfig(email, slotId) {
  */
 export function resolveAccountKey(user) {
   const email = String(user?.email || '').trim().toLowerCase();
-  if (email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return email;
+  if (email && (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.startsWith('local:'))) return email;
   if (user?.discordId) return `discord:${String(user.discordId)}`;
   return `anon:${Date.now()}`;
 }

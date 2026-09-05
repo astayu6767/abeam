@@ -20,9 +20,11 @@ server:
   responses.
 
 The manager uses `azalea` by default. `mineflayer` remains available only
-when an operator explicitly sends `"engine": "mineflayer"`. A small responsive
-control dashboard is served at `/` and `/dashboard`; it supports account login,
-bot creation, status, logs, console chat, start/stop and deletion. The older
+when an operator explicitly sends `"engine": "mineflayer"`. The dashboard is
+the original `mc-bot-manager` App Router UI (the reference `src/app` components,
+styles, layout, login flow, bot cards, console/game view, license, shop, admin,
+training, and settings panels) and is served at both `/` and `/dashboard`.
+Only its API calls are backed by this Express/Azalea service. The older
 `/api/slots` path remains available for the repository's external
 `abeam.exe`/WebSocket workflow.
 
@@ -92,9 +94,13 @@ will restart a running bot.
 ```bash
 npm ci
 cp .env.example .env
-npm start
-# health: http://localhost:8080/healthz
+npm run dev
+# dashboard: http://localhost:8080/
+# health:    http://localhost:8080/healthz
 ```
+
+`npm run build` compiles the reference Next.js UI. `npm start` runs the
+production Next/Express server after that build.
 
 The JSON files in `data/` are the development datastore. Do not run more than
 one application replica against the same JSON files. For production, mount a
@@ -103,9 +109,9 @@ Railway volume at `/app/data`.
 ## Railway deployment
 
 The repository includes `Dockerfile`, `railway.json`, and a `/healthz`
-healthcheck. The Dockerfile first compiles the Azalea Rust sidecar and then
-packages it with the Node API. The first Railway build can take roughly
-10–20 minutes. No Postgres service is required by this version because the
+healthcheck. The Dockerfile first compiles the Azalea Rust sidecar, builds the
+reference Next.js dashboard, and then packages both with the Node API. The
+first Railway build can take roughly 10–20 minutes. No Postgres service is required by this version because the
 existing application uses its JSON store; a persistent volume is required if
 accounts, invoices, sessions, and bot definitions must survive deploys.
 
@@ -156,8 +162,10 @@ accounts, invoices, sessions, and bot definitions must survive deploys.
 - `data/` contains account/session/billing state and bot access tokens. Protect
   the Railway volume and rotate any token that was exposed. A managed database
   should replace the JSON store before running multiple replicas.
-- `ALLOW_DEMO` is hard-disabled when `NODE_ENV=production`; do not rely on the
-  demo account in Railway.
+- `ALLOW_DEMO` is hard-disabled when `NODE_ENV=production`; it controls the
+  development trial/demo entitlement. When Discord OAuth is not configured,
+  the reference UI can still use its guest login, but production users should
+  use a real local account or Discord OAuth and an issued license.
 - A Minecraft access token can expire. Update it through `PATCH /api/bots/:id`
   rather than putting it in a dashboard response or log.
 - The linked `mc-bot-manager` Azalea sidecar is now included under

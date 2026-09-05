@@ -5,5 +5,5 @@ export function isAdminUser(user) {
   const u = user || {};
   const email = String(u.email || '').trim().toLowerCase();
   const did = String(u.discordId || '').trim();
-  return config.adminEmails.includes(email) || config.adminDiscordIds.includes(did);
+  return u.role === 'admin' || config.adminEmails.includes(email) || config.adminDiscordIds.includes(did);
 }

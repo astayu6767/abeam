@@ -2,6 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import next from 'next';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { config } from './config.js';
@@ -18,10 +19,12 @@ import {
 } from './auth/web-session.js';
 import { createBotBridge } from './bot-bridge.js';
 import { paidPlans, planById } from './plans.js';
-import { checkLogin, setPasswordUser, normalizeEmail } from './auth/password.js';
+import { checkLogin, getPasswordUser, setPasswordUser, normalizeEmail } from './auth/password.js';
 import {
   createInvoice,
   getInvoice,
+  markPaid,
+  checkAddress,
   startWatcher,
   cancelStaleInvoices,
 } from './billing/invoices.js';
@@ -75,9 +78,18 @@ import {
 } from './bots/manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = path.join(__dirname, 'public');
 const app = express();
 const server = http.createServer(app);
+
+// The reference mc-bot-manager UI is rendered by Next while this Express
+// process continues to own the API, Azalea bridge, and websocket endpoints.
+// Keeping both behind one listener means browser requests stay same-origin on
+// Railway and the UI can use its original /api/* calls unchanged.
+const nextApp = next({
+  dev: config.env !== 'production',
+  dir: __dirname,
+});
+const nextHandler = nextApp.getRequestHandler();
 
 function isAdmin(user) {
   return isAdminUser(user);
@@ -86,15 +98,7 @@ function isAdmin(user) {
 app.use(cors({ origin: config.appUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.static(PUBLIC_DIR));
 app.set('trust proxy', 1);
-
-// The backend repository also serves its small dashboard. Keep both the root
-// URL and /dashboard usable on Railway instead of returning Express' default
-// "Cannot GET" response.
-app.get(['/', '/dashboard', '/dashboard/'], (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
-});
 
 // Railway and uptime monitors use this endpoint; it intentionally does not
 // touch billing, Minecraft services, or the JSON store.
@@ -159,33 +163,141 @@ app.put('/api/settings', requireSsid, (req, res) => {
 // ---------------------------------------------------------------
 // Email/password auth (dashboard login)
 // ---------------------------------------------------------------
-app.post('/api/auth/signup', (req, res) => {
-  const { email, password } = req.body || {};
-  const key = normalizeEmail(email);
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) {
-    return res.status(400).json({ error: 'invalid_email' });
+// The reference UI calls these endpoints with a username. The original
+// backend used email addresses, so local usernames are stored in an internal
+// `local:` account namespace while email logins remain compatible.
+function accountKeyForLogin(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const normalized = normalizeEmail(raw);
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return normalized;
+  const slug = raw.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  return slug ? `local:${slug}` : '';
+}
+
+function displayNameForAccount(value, fallback = 'user') {
+  const raw = String(value || '').trim();
+  if (raw.startsWith('local:')) return raw.slice('local:'.length) || fallback;
+  if (raw.includes('@')) return raw.split('@')[0] || fallback;
+  return raw || fallback;
+}
+
+function rememberWebUser(user) {
+  const users = store.users.all();
+  const key = resolveAccountKey(user);
+  const index = users.findIndex((entry) => resolveAccountKey(entry) === key);
+  const existing = index >= 0 ? users[index] : null;
+  const next = {
+    ...(existing || {}),
+    ...user,
+    email: key,
+    username: user.username || existing?.username || displayNameForAccount(key),
+    createdAt: existing?.createdAt || Date.now(),
+    role: user.role || existing?.role || (users.length === 0 ? 'admin' : 'user'),
+  };
+  if (index >= 0) users[index] = next;
+  else users.push(next);
+  store.users.save(users);
+  return next;
+}
+
+function publicWebUser(user) {
+  if (!user) return null;
+  const remembered = rememberWebUser(user);
+  const email = String(remembered.email || '').trim().toLowerCase();
+  const admin = isAdmin(remembered);
+  return {
+    id: remembered.id || remembered.discordId || email,
+    username: remembered.username || displayNameForAccount(email),
+    avatar: remembered.avatar || null,
+    role: admin ? 'admin' : 'user',
+    botSlots: admin ? -1 : botQuota(email, false),
+    botCount: countBots(email),
+    isGuest: remembered.via === 'guest',
+    licenseStatus: referenceSlotStatus(email, admin),
+  };
+}
+
+function localIdentity(rawValue, password, via = 'password') {
+  const key = accountKeyForLogin(rawValue);
+  if (!key) return null;
+  const name = displayNameForAccount(key);
+  const users = store.users.all();
+  const existing = users.find((entry) => resolveAccountKey(entry) === key);
+  const user = rememberWebUser({
+    email: key,
+    username: name,
+    via,
+    role: existing?.role || (users.length === 0 ? 'admin' : 'user'),
+  });
+  if (password !== undefined) {
+    setPasswordUser(key, password);
   }
-  if (typeof password !== 'string' || password.length < 6) {
-    return res.status(400).json({ error: 'password must be at least 6 characters' });
-  }
-  if (checkLogin(key, password)) {
-    return res.status(409).json({ error: 'email already has an account — try signing in' });
-  }
-  setPasswordUser(key, password);
   ensureLocalTrial(key);
-  const user = { email: key, username: key.split('@')[0], via: 'password' };
-  createSession(config.sessionSecret, user, res);
-  res.json({ ok: true, email: key });
+  return user;
+}
+
+function createLocalAccount(rawValue, password, res) {
+  const key = accountKeyForLogin(rawValue);
+  if (!key) return { error: 'username required' };
+  if (getPasswordUser(key)) return { error: 'username already has an account' };
+  if (typeof password !== 'string' || password.length < 6) {
+    return { error: 'password must be at least 6 characters' };
+  }
+  const user = localIdentity(rawValue, password, 'password');
+  if (res) createSession(config.sessionSecret, user, res);
+  return { user };
+}
+
+app.post('/api/auth/signup', (req, res) => {
+  const result = createLocalAccount(req.body?.email, req.body?.password, res);
+  if (result.error) return res.status(result.error.includes('already') ? 409 : 400).json({ error: result.error });
+  res.json({ ok: true, email: result.user.email, user: publicWebUser(result.user) });
+});
+
+app.post('/api/auth/register', (req, res) => {
+  const result = createLocalAccount(req.body?.username ?? req.body?.email, req.body?.password, res);
+  if (result.error) return res.status(result.error.includes('already') ? 409 : 400).json({ error: result.error });
+  res.json({ ok: true, user: publicWebUser(result.user) });
 });
 
 app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body || {};
-  const user = checkLogin(email, password);
+  const key = accountKeyForLogin(req.body?.username ?? req.body?.email);
+  const user = checkLogin(key, req.body?.password);
   if (!user) {
-    return res.status(401).json({ error: 'wrong email or password' });
+    return res.status(401).json({ error: 'wrong username or password' });
   }
+  const remembered = rememberWebUser({
+    ...user,
+    email: key,
+    username: displayNameForAccount(key),
+    via: 'password',
+  });
+  createSession(config.sessionSecret, remembered, res);
+  res.json({ ok: true, email: key, user: publicWebUser(remembered) });
+});
+
+app.post('/api/auth/dev-login', (req, res) => {
+  if (config.discordClientId && config.discordClientSecret) {
+    return res.status(403).json({ error: 'guest_login_disabled' });
+  }
+  const name = String(req.body?.name || 'guest').trim().slice(0, 48) || 'guest';
+  const user = localIdentity(name, undefined, 'guest');
   createSession(config.sessionSecret, user, res);
-  res.json({ ok: true, email: user.email });
+  res.json({ ok: true, user: publicWebUser(user) });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const user = getSessionUser(req, config.sessionSecret);
+  res.json({
+    user: user ? publicWebUser(user) : null,
+    discordConfigured: !!(config.discordClientId && config.discordClientSecret),
+  });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  destroySession(config.sessionSecret, req, res);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------
@@ -193,6 +305,10 @@ app.post('/api/auth/login', (req, res) => {
 // ---------------------------------------------------------------
 const DISCORD_AUTH_URL = 'https://discord.com/api/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';
+
+app.get('/api/auth/discord/login', (req, res) => {
+  res.redirect('/login/discord');
+});
 
 app.get('/login/discord', (req, res) => {
   if (!config.discordClientId) {
@@ -335,9 +451,33 @@ function botQuota(email, admin = false) {
   return Number(sub.botSlots) || 0;
 }
 
+function referenceSlotStatus(email, admin = false) {
+  const totalSlots = botQuota(email, admin);
+  const usedSlots = countBots(email);
+  const sub = getSubscriber(email);
+  return {
+    totalSlots,
+    usedSlots,
+    availableSlots: totalSlots < 0 ? -1 : Math.max(0, totalSlots - usedSlots),
+    activeLicenses: [],
+    expiredLicenses: [],
+    hasActiveLicense: totalSlots !== 0,
+    nextExpiry: sub?.expiresAt ? new Date(Number(sub.expiresAt)).toISOString() : null,
+  };
+}
+
 function publicBotById(req, id) {
   const rows = listBots(req.web.email, isAdmin(req.web));
   return rows.find((row) => row.id === id) || null;
+}
+
+function referenceBeamState(id) {
+  const state = getBeamState(id) || {};
+  return {
+    ...state,
+    looping: !!state.enabled,
+    stage: state.target ? `talking to ${state.target}` : '',
+  };
 }
 
 app.get('/api/bots', requireBotUser, (req, res) => {
@@ -345,6 +485,7 @@ app.get('/api/bots', requireBotUser, (req, res) => {
     bots: listBots(req.web.email, isAdmin(req.web)),
     slots: botQuota(req.web.email, isAdmin(req.web)),
     used: countBots(req.web.email),
+    licenseStatus: referenceSlotStatus(req.web.email, isAdmin(req.web)),
   });
 });
 
@@ -429,7 +570,7 @@ app.get('/api/bots/:id/console', requireBotUser, (req, res) => {
   res.json({
     logs: getLogs(req.params.id),
     ...getRuntimeView(req.params.id),
-    beam: getBeamState(req.params.id),
+    beam: referenceBeamState(req.params.id),
   });
 });
 
@@ -449,7 +590,7 @@ app.get('/api/bots/:id/view', requireBotUser, (req, res) => {
   const { record, allowed } = botRecordForRequest(req, req.params.id);
   if (!record) return res.status(404).json({ error: 'bot_not_found' });
   if (!allowed) return res.status(403).json({ error: 'forbidden' });
-  res.json({ ...getRuntimeView(req.params.id), snapshot: getViewSnapshot(req.params.id), beam: getBeamState(req.params.id) });
+  res.json({ ...getRuntimeView(req.params.id), snapshot: getViewSnapshot(req.params.id), beam: referenceBeamState(req.params.id) });
 });
 
 app.post('/api/bots/:id/action', requireBotUser, async (req, res) => {
@@ -501,6 +642,162 @@ app.get('/api/plans', (req, res) => {
     discordConfigured: !!(config.discordClientId && config.discordClientSecret),
     demoAllowed: !!config.allowDemo,
   });
+});
+
+function referenceShopPlan(plan) {
+  return {
+    id: plan.id,
+    tier: plan.name,
+    price: plan.priceUsd,
+    finalPrice: plan.priceUsd,
+    bots: plan.botSlots,
+    // The legacy plan model is monthly; keep the reference card's daily
+    // capacity wording without changing the plan's actual entitlement.
+    hours: 24,
+    features: plan.features || [],
+    popular: !!plan.popular,
+    active: true,
+    discount: 0,
+  };
+}
+
+function referenceInvoice(invoice) {
+  const plan = planById(invoice?.planId);
+  const createdAt = new Date(Number(invoice?.created || Date.now()));
+  const expiresAt = new Date(createdAt.getTime() + Math.min(config.invoiceTtlMs, 30 * 60 * 1000));
+  let ownerLtcAddress = '';
+  try {
+    ownerLtcAddress = ownerAddress();
+  } catch {
+    // A production deployment without LTC_SEED can still browse the shop.
+  }
+  return {
+    id: invoice.id,
+    planId: invoice.planId,
+    amountUSD: Number(invoice.amountUsd || 0),
+    amountLTC: Number(invoice.amountLtc || 0).toFixed(6),
+    ltcAddress: invoice.address,
+    ownerLtcAddress,
+    status: invoice.status,
+    expiresAt: expiresAt.toISOString(),
+    createdAt: createdAt.toISOString(),
+    tier: plan?.name || invoice.planId,
+    bots: plan?.botSlots || 0,
+    hours: 24,
+    licenseKey: invoice.licenseKey || null,
+  };
+}
+
+function ensureShopLicense(invoice) {
+  if (!invoice || !invoice.planId || invoice.creditKind === 'credits') return null;
+  if (!invoice.licenseKey) {
+    invoice.licenseKey = generateLicenseKey(invoice.planId, 'shop', 1);
+    const all = store.invoices.all();
+    store.invoices.save(all.map((entry) => (entry.id === invoice.id ? invoice : entry)));
+  }
+  return invoice.licenseKey;
+}
+
+// Compatibility routes for the reference shop panel. They translate the
+// existing Abeam LTC invoice model instead of introducing a second store.
+app.get('/api/shop/plans', async (_req, res) => {
+  let ltcPrice = Number(config.ltcUsdRate) || 0;
+  try {
+    ltcPrice = await fetchLtcPrice();
+  } catch {}
+  res.json({ plans: paidPlans().map(referenceShopPlan), ltcPrice });
+});
+
+app.get('/api/shop/invoices', requireWeb, (req, res) => {
+  const invoices = store.invoices
+    .all()
+    .filter((invoice) => invoice.email === req.web.email)
+    .reverse()
+    .map(referenceInvoice);
+  res.json({ invoices });
+});
+
+app.post('/api/shop/invoices', requireWeb, async (req, res) => {
+  try {
+    const invoice = await createInvoice(String(req.body?.planId || ''), req.web.email);
+    res.status(201).json({ invoice: referenceInvoice(invoice) });
+  } catch (error) {
+    res.status(400).json({ error: error?.message || 'could not create invoice' });
+  }
+});
+
+app.get('/api/shop/invoices/:id', requireWeb, (req, res) => {
+  const invoice = getInvoice(req.params.id);
+  if (!invoice || invoice.email !== req.web.email) return res.status(404).json({ error: 'invoice not found' });
+  res.json({ invoice: referenceInvoice(invoice) });
+});
+
+app.delete('/api/shop/invoices/:id', requireWeb, (req, res) => {
+  const invoice = getInvoice(req.params.id);
+  if (!invoice || invoice.email !== req.web.email) return res.status(404).json({ error: 'invoice not found' });
+  if (invoice.status === 'paid') return res.status(400).json({ error: 'invoice already paid' });
+  invoice.status = 'cancelled';
+  invoice.cancelledAt = Date.now();
+  store.invoices.save(store.invoices.all());
+  res.json({ ok: true });
+});
+
+app.post('/api/shop/invoices/:id/check', requireWeb, async (req, res) => {
+  const invoice = getInvoice(req.params.id);
+  if (!invoice || invoice.email !== req.web.email) return res.status(404).json({ error: 'invoice not found' });
+
+  if (req.body?.forcePaid && isAdmin(req.web)) {
+    markPaid(invoice, 'manual', 0, (paid) => {
+      try {
+        grantSubscription({ planId: paid.planId, months: 1 }, paid.email);
+      } catch {}
+    });
+  } else if (invoice.status !== 'paid') {
+    try {
+      const result = await checkAddress(invoice.address);
+      const paid = result.ok && result.value >= Number(invoice.amountLtc || 0) && result.confirmations >= config.confirmationsRequired;
+      if (paid) {
+        markPaid(invoice, result.tx, result.confirmations, (paidInvoice) => {
+          try {
+            grantSubscription({ planId: paidInvoice.planId, months: 1 }, paidInvoice.email);
+          } catch {}
+        });
+      }
+    } catch {
+      // Keep the checkout polling-friendly when BlockCypher is rate-limited.
+    }
+  }
+
+  if (invoice.status !== 'paid') {
+    return res.json({ paid: false, balance: '0' });
+  }
+  const licenseKey = ensureShopLicense(invoice);
+  const plan = planById(invoice.planId);
+  res.json({
+    paid: true,
+    licenseKey,
+    bots: plan?.botSlots || 0,
+    tier: plan?.name || invoice.planId,
+  });
+});
+
+app.get('/api/shop/settings', requireAdmin, (_req, res) => {
+  let ownerLtcAddress = '';
+  try {
+    ownerLtcAddress = ownerAddress();
+  } catch {}
+  res.json({ ownerLtcAddress });
+});
+
+app.post('/api/shop/settings', requireAdmin, (req, res) => {
+  // The wallet address is deterministically derived from LTC_SEED in this
+  // backend. Keep the endpoint for the reference admin screen but do not allow
+  // an arbitrary address to replace the signing wallet.
+  let ownerLtcAddress = '';
+  try {
+    ownerLtcAddress = ownerAddress();
+  } catch {}
+  res.json({ ok: true, ownerLtcAddress });
 });
 
 // Create an invoice (fresh LTC receive address) for a paid plan.
@@ -598,14 +895,69 @@ app.get('/api/account', requireWeb, (req, res) => {
 });
 
 // A subscriber's license history: current subscription + every invoice paid
-// (or pending) for their account.
+// (or pending) for their account. The slot fields mirror the reference UI;
+// the invoice/current fields remain for older API consumers.
 app.get('/api/licenses', requireWeb, (req, res) => {
+  const email = req.web.email;
   const invoices = store.invoices
     .all()
-    .filter((i) => i.email === req.web.email)
+    .filter((i) => i.email === email)
     .reverse();
-  const sub = getSubscriber(req.web.email);
+  const sub = getSubscriber(email);
+  const redeemed = store.licenses
+    .all()
+    .filter((license) => license.redeemedBy === email)
+    .reverse();
+  const active = !!sub && !!sub.planId && Number(sub.botSlots) > 0 && sub.status !== 'expired' && sub.status !== 'revoked';
+  const expiry = active && sub.expiresAt ? new Date(Number(sub.expiresAt)) : null;
+  const activeKey = redeemed.find((license) => license.planId === sub?.planId) || null;
+
+  function licenseInfo(license, isActive) {
+    const months = Number(license?.months || 0);
+    const customDuration = license?.durationDays !== undefined || license?.durationHours !== undefined;
+    const durationDays = customDuration ? Number(license?.durationDays || 0) : Math.floor(months * 30);
+    const durationHours = customDuration ? Number(license?.durationHours || 0) : (Math.round(months * 30 * 24) % 24);
+    const totalDurationMs = (durationDays * 24 + durationHours) * 3_600_000;
+    const expiresAt = isActive && sub?.expiresAt
+      ? new Date(Number(sub.expiresAt))
+      : (license?.redeemedAt && totalDurationMs > 0
+        ? new Date(Number(license.redeemedAt) + totalDurationMs)
+        : new Date('2099-12-31T23:59:59.000Z'));
+    const remaining = expiresAt.getTime() - Date.now();
+    const hoursLeft = Math.max(0, Math.floor(remaining / 3_600_000));
+    const timeLeft = remaining > 0
+      ? `${Math.floor(hoursLeft / 24)}d ${hoursLeft % 24}h left`
+      : 'Expired';
+    return {
+      id: license?.code || `${email}-${sub?.planId || 'license'}`,
+      slots: isActive ? Number(sub?.botSlots || 0) : Number(license?.requestedSlots || planById(license?.planId)?.botSlots || 0),
+      durationDays,
+      durationHours,
+      expiresAt: expiresAt.toISOString(),
+      active: isActive && remaining > 0,
+      reason: license?.reason || (sub?.trial ? 'trial' : ''),
+      licenseKey: license?.code,
+      createdAt: new Date(Number(license?.created || sub?.since || Date.now())).toISOString(),
+      isExpired: remaining <= 0,
+      timeLeft,
+    };
+  }
+
+  const activeLicenses = active ? [licenseInfo(activeKey, true)] : [];
+  const expiredLicenses = redeemed
+    .filter((license) => !active || license !== activeKey)
+    .map((license) => licenseInfo(license, false));
+  const totalSlots = active ? Number(sub.botSlots || 0) : 0;
+  const usedSlots = countBots(email);
+
   res.json({
+    totalSlots,
+    usedSlots,
+    availableSlots: Math.max(0, totalSlots - usedSlots),
+    activeLicenses,
+    expiredLicenses,
+    hasActiveLicense: active,
+    nextExpiry: expiry && Number.isFinite(expiry.getTime()) ? expiry.toISOString() : null,
     redeemable: true,
     explorer: EXPLORER_BASE,
     invoices: invoices.map((i) => ({
@@ -639,13 +991,21 @@ app.get('/api/licenses', requireWeb, (req, res) => {
 
 // Redeem a one-time serial license key; grants its plan to the signed-in account.
 app.post('/api/licenses/redeem', requireWeb, (req, res) => {
-  const code = String(req.body?.code || '').toUpperCase().trim();
+  const rawCode = String(req.body?.code || req.body?.key || '').trim();
+  // Legacy serials were case-insensitive; the reference key format is already
+  // lower-case but accepting both keeps old keys redeemable.
+  const code = rawCode.toLowerCase().startsWith('abeam-key-') ? rawCode : rawCode.toUpperCase();
   const email = req.web.email;
   if (!code) return res.status(400).json({ error: 'code_required' });
   const result = redeemLicenseKey(code, email);
   if (!result.ok) return res.status(400).json({ error: result.reason });
   if (typeof supervisor?.sync === 'function') supervisor.sync();
-  return res.json({ ok: true, planId: result.planId, subscriber: result.subscriber });
+  return res.json({
+    ok: true,
+    planId: result.planId,
+    subscriber: result.subscriber,
+    license: result.license,
+  });
 });
 
 // Operator-only: mint serial license keys (default count 1, cap 50).
@@ -755,13 +1115,20 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
       const sub = subMap[key] || null;
       const online = sub ? Object.keys(supervisor.slotStatus(key) || {}).length : 0;
       return {
+        id: key,
         key,
         email: sub?.email || u.email || null,
         username: u.username || null,
+        avatar: u.avatar || null,
         discordId: u.discordId || null,
+        role: isAdmin(u) ? 'admin' : 'user',
+        botCount: countBots(key),
+        botsOnline: online,
         via: u.via || (u.discordId ? 'discord' : 'backend'),
-        created: u.created || u.since || null,
+        created: u.created || u.createdAt || u.since || null,
+        createdAt: u.created || u.createdAt || u.since || new Date().toISOString(),
         admin: isAdmin(u),
+        isGuest: u.via === 'guest',
         planId: sub?.planId || null,
         planName: sub?.planName || null,
         botSlots: Number(sub?.botSlots) || 0,
@@ -774,6 +1141,208 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
     });
   rows.sort((a, b) => ((b.planId ? 1 : 0) - (a.planId ? 1 : 0)) || ((b.online || 0) - (a.online || 0)));
   res.json({ users: rows, total: (store.users.all() || []).length });
+});
+
+function adminAccountKey(raw) {
+  return decodeURIComponent(String(raw || '')).trim().toLowerCase();
+}
+
+function ensureAdminSubscriber(email) {
+  const all = store.subscribers.all();
+  const existing = all[email];
+  if (existing) return existing;
+  const sub = {
+    email,
+    planId: null,
+    botSlots: 0,
+    ssids: [],
+    targetServers: [],
+    configs: [],
+    since: Date.now(),
+    status: 'inactive',
+  };
+  all[email] = sub;
+  store.subscribers.save(all);
+  return sub;
+}
+
+// Reference AdminPanel compatibility: user-centric management wrappers over
+// the current email/local-account and persisted-bot stores.
+app.get('/api/admin/users/:id/bots', requireAdmin, (req, res) => {
+  const key = adminAccountKey(req.params.id);
+  res.json({ bots: listBots(key, false) });
+});
+
+app.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const key = adminAccountKey(req.params.id);
+  const patch = req.body || {};
+  if (patch.botSlots !== undefined) {
+    const slots = Number(patch.botSlots);
+    if (!Number.isInteger(slots) || slots < 0 || slots > 50) {
+      return res.status(400).json({ error: 'invalid_slot_count' });
+    }
+    const sub = ensureAdminSubscriber(key);
+    sub.botSlots = slots;
+    sub.status = slots > 0 ? 'active' : 'inactive';
+    if (slots > 0 && !sub.planId) sub.planId = slots <= 1 ? 'ace' : slots <= 4 ? 'raid' : 'storm';
+    const all = store.subscribers.all();
+    all[key] = sub;
+    store.subscribers.save(all);
+  }
+  if (patch.role !== undefined) {
+    const users = store.users.all();
+    const index = users.findIndex((entry) => resolveAccountKey(entry) === key);
+    if (index >= 0) {
+      users[index] = { ...users[index], role: patch.role === 'admin' ? 'admin' : 'user' };
+      store.users.save(users);
+    }
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const key = adminAccountKey(req.params.id);
+  for (const bot of listBots(key, false)) {
+    await deleteManagedBot(bot.id);
+  }
+  const users = store.users.all().filter((entry) => resolveAccountKey(entry) !== key);
+  store.users.save(users);
+  const subscribers = store.subscribers.all();
+  delete subscribers[key];
+  store.subscribers.save(subscribers);
+  const sessions = store.sessions.all();
+  for (const [sid, record] of Object.entries(sessions)) {
+    if (record && resolveAccountKey(record.user) === key) delete sessions[sid];
+  }
+  store.sessions.save(sessions);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/create', requireAdmin, (req, res) => {
+  const result = createLocalAccount(req.body?.username, req.body?.password, null);
+  if (result.error) return res.status(result.error.includes('already') ? 409 : 400).json({ error: result.error });
+  const key = result.user.email;
+  if (req.body?.role === 'admin') {
+    const users = store.users.all();
+    const index = users.findIndex((entry) => resolveAccountKey(entry) === key);
+    if (index >= 0) {
+      users[index] = { ...users[index], role: 'admin' };
+      store.users.save(users);
+    }
+  }
+  res.json({ ok: true, user: publicWebUser(result.user) });
+});
+
+function adminLicenseKeyView(key) {
+  const plan = planById(key.planId);
+  const customDuration = key.durationDays !== undefined || key.durationHours !== undefined;
+  const durationHours = Math.max(0, Math.round(Number(key.months || 0) * 30 * 24));
+  return {
+    id: key.code,
+    key: key.code,
+    slots: Number(key.requestedSlots || plan?.botSlots || 0),
+    durationDays: customDuration ? Number(key.durationDays || 0) : Math.floor(durationHours / 24),
+    durationHours: customDuration ? Number(key.durationHours || 0) : durationHours % 24,
+    reason: key.reason || '',
+    active: !key.redeemedAt,
+    redeemed: !!key.redeemedAt,
+    redeemedBy: key.redeemedBy || null,
+    redeemedByUsername: key.redeemedBy || null,
+    redeemedAt: key.redeemedAt ? new Date(key.redeemedAt).toISOString() : null,
+    createdAt: new Date(Number(key.created || Date.now())).toISOString(),
+  };
+}
+
+app.get('/api/admin/licenses', requireAdmin, (_req, res) => {
+  const licenseKeys = store.licenses.all().slice().reverse().map(adminLicenseKeyView);
+  const licenses = Object.values(store.subscribers.all()).filter((sub) => sub.planId).map((sub) => ({
+    id: `${sub.email}:${sub.planId}`,
+    userId: sub.email,
+    username: sub.email,
+    slots: Number(sub.botSlots || 0),
+    durationDays: sub.expiresAt ? Math.max(0, Math.floor((Number(sub.expiresAt) - Number(sub.since || Date.now())) / 86_400_000)) : 0,
+    durationHours: 0,
+    expiresAt: sub.expiresAt ? new Date(Number(sub.expiresAt)).toISOString() : new Date('2099-12-31T23:59:59.000Z').toISOString(),
+    active: sub.status !== 'expired' && sub.status !== 'revoked',
+    reason: sub.trial ? 'trial' : '',
+    createdAt: new Date(Number(sub.since || Date.now())).toISOString(),
+    isExpired: sub.status === 'expired',
+    timeLeft: sub.expiresAt ? `${Math.max(0, Math.floor((Number(sub.expiresAt) - Date.now()) / 86_400_000))}d` : 'Lifetime',
+  }));
+  res.json({ licenseKeys, licenses });
+});
+
+app.post('/api/admin/licenses', requireAdmin, (req, res) => {
+  const slots = Math.max(1, Math.min(50, Number(req.body?.slots) || 1));
+  const days = Math.max(0, Math.min(3650, Number(req.body?.durationDays) || 0));
+  const hours = Math.max(0, Math.min(23, Number(req.body?.durationHours) || 0));
+  const planId = slots <= 1 ? 'ace' : slots <= 4 ? 'raid' : 'storm';
+  const months = Math.max(1, Math.round((days + hours / 24) / 30));
+  try {
+    const code = generateLicenseKey(planId, req.web?.email || 'admin', months);
+    const all = store.licenses.all();
+    const key = all.find((entry) => entry.code === code);
+    if (key) {
+      key.reason = String(req.body?.reason || '').trim().slice(0, 160);
+      key.requestedSlots = slots;
+      key.durationDays = days;
+      key.durationHours = hours;
+      store.licenses.save(all);
+    }
+    res.status(201).json({ ok: true, key: code, licenseKey: adminLicenseKeyView(key || { code, planId, months, created: Date.now() }) });
+  } catch (error) {
+    res.status(400).json({ error: error?.message || 'generate_failed' });
+  }
+});
+
+app.patch('/api/admin/licenses/:id', requireAdmin, (req, res) => {
+  const id = decodeURIComponent(req.params.id);
+  const type = String(req.body?.type || 'key');
+  if (type === 'key') {
+    const all = store.licenses.all();
+    const key = all.find((entry) => entry.code === id);
+    if (!key) return res.status(404).json({ error: 'not_found' });
+    if (req.body?.action === 'revoke') key.revoked = true;
+    store.licenses.save(all);
+  }
+  res.json({ ok: true });
+});
+
+const TRAINING_CONFIG_KEY = 'beamTraining';
+function trainingState() {
+  const all = store.config.all();
+  return all[TRAINING_CONFIG_KEY] || { enabled: false, learnings: '' };
+}
+
+app.get('/api/admin/training', requireAdmin, (_req, res) => {
+  const state = trainingState();
+  const conversations = store.conversations.all().map((conversation, index) => ({
+    id: conversation.id || `conversation-${index}`,
+    target: conversation.target || conversation.targetName || null,
+    outcome: conversation.outcome || 'stopped',
+    transcript: conversation.transcript || conversation.messages || [],
+    createdAt: new Date(Number(conversation.createdAt || conversation.startedAt || Date.now())).toISOString(),
+  }));
+  res.json({ training: !!state.enabled, learnings: state.learnings || '', conversations });
+});
+
+app.post('/api/admin/training', requireAdmin, (req, res) => {
+  const all = store.config.all();
+  const state = { ...trainingState() };
+  const action = String(req.body?.action || '');
+  if (action === 'toggle') state.enabled = !!req.body?.value;
+  if (action === 'save_learnings') state.learnings = String(req.body?.learnings || '').slice(0, 20_000);
+  if (action === 'clear') store.conversations.save([]);
+  if (action === 'analyze') {
+    const total = store.conversations.all().length;
+    state.learnings = state.learnings || (total ? 'Prefer concise, natural replies and respect the player\'s tone.' : '');
+    all[TRAINING_CONFIG_KEY] = state;
+    store.config.save(all);
+    return res.json({ ok: total > 0, analyzed: total, learnings: state.learnings });
+  }
+  all[TRAINING_CONFIG_KEY] = state;
+  store.config.save(all);
+  res.json({ ok: true, training: !!state.enabled, learnings: state.learnings || '' });
 });
 
 // Operator: owner wallet / revenue overview (paid invoices + balance owed).
@@ -1180,7 +1749,21 @@ function expireAndSync() {
 expireAndSync();
 setInterval(expireAndSync, 10 * 60 * 1000);
 
-server.listen(config.port, () => {
-  console.log(`[abeam] dashboard + api listening on http://localhost:${config.port}`);
+// Let Next render the reference dashboard after every Express API route has
+// had a chance to handle the request. `/dashboard` is an alias for `/` so
+// existing bookmarks keep the same UI too.
+await nextApp.prepare();
+app.get('/dashboard', (req, res) => {
+  req.url = '/';
+  return nextHandler(req, res);
+});
+app.get('/dashboard/', (req, res) => {
+  req.url = '/';
+  return nextHandler(req, res);
+});
+app.get('*', (req, res) => nextHandler(req, res));
+
+server.listen(config.port, '0.0.0.0', () => {
+  console.log(`[abeam] dashboard + api listening on http://0.0.0.0:${config.port}`);
   if (config.allowDemo) console.log(`[abeam] demo ssid: ${config.demoSsid}`);
 });

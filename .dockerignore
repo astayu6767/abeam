@@ -5,6 +5,8 @@ npm-debug.log*
 *.log
 coverage
 .nyc_output
+.next
+tsconfig.tsbuildinfo
 .env
 .env.*
 test

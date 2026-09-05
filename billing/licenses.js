@@ -19,9 +19,11 @@ function groupFromHex(hex) {
   return out;
 }
 
-/** Validate the canonical ABEAM-XXXX-XXXX-XXXX-XXXX form. */
+/** Validate both the original serial format and the reference UI's key form. */
 export function validateLicenseCode(code) {
-  return /^ABEAM-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(code || '');
+  const value = String(code || '').trim();
+  return /^ABEAM-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(value)
+    || /^abeam-key-[a-z0-9-]{8,80}$/i.test(value);
 }
 
 const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
@@ -37,11 +39,7 @@ export function clampMonths(months) {
  *  `months` = subscription duration on redemption (0 = lifetime). */
 export function generateLicenseKey(planId, createdBy, months = 0) {
   if (!planById(planId)) throw new Error('plan no longer exists');
-  const groups = [];
-  for (let i = 0; i < GROUPS; i++) {
-    groups.push(groupFromHex(crypto.randomBytes(2).toString('hex')));
-  }
-  const code = `ABEAM-${groups.join('-')}`;
+  const code = `abeam-key-${crypto.randomBytes(12).toString('hex')}`;
   const keys = store.licenses.all();
   keys.push({
     code,
@@ -66,8 +64,40 @@ export function redeemLicenseKey(code, email) {
   key.redeemedBy = email;
   key.redeemedAt = Date.now();
   store.licenses.save(keys);
-  const { subscriber } = grantSubscription({ planId: key.planId, months: key.months }, email);
-  return { ok: true, planId: key.planId, months: key.months, subscriber };
+  const { subscriber: granted } = grantSubscription({ planId: key.planId, months: key.months }, email);
+  let subscriber = granted;
+  const hasCustomDuration = key.durationDays !== undefined || key.durationHours !== undefined;
+  if (hasCustomDuration || key.requestedSlots !== undefined) {
+    const all = store.subscribers.all();
+    subscriber = {
+      ...granted,
+      botSlots: Number(key.requestedSlots || granted.botSlots),
+      expiresAt: Number(key.durationDays || 0) || Number(key.durationHours || 0)
+        ? Date.now() + (Number(key.durationDays || 0) * 24 + Number(key.durationHours || 0)) * 3_600_000
+        : null,
+    };
+    all[email] = subscriber;
+    store.subscribers.save(all);
+  }
+  const durationDays = hasCustomDuration
+    ? Math.max(0, Number(key.durationDays || 0))
+    : Math.floor(Math.max(0, Number(key.months || 0) * 30));
+  const durationHours = hasCustomDuration
+    ? Math.max(0, Number(key.durationHours || 0))
+    : Math.max(0, Math.round(Number(key.months || 0) * 30 * 24)) % 24;
+  return {
+    ok: true,
+    planId: key.planId,
+    months: key.months,
+    subscriber,
+    license: {
+      slots: subscriber.botSlots,
+      durationDays,
+      durationHours,
+      expiresAt: subscriber.expiresAt || null,
+      licenseKey: key.code,
+    },
+  };
 }
 
 /** List keys, optionally filtered by plan (newest first). */
