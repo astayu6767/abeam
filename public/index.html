@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en" data-theme="green">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1e1e2e">
+  <meta name="description" content="abeam — Auto Beamer, the DM hustle on autopilot.">
+  <title>abeam · Auto Beamer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <div class="grid-overlay"></div><div class="orb orb-a"></div><div class="orb orb-b"></div><div class="orb orb-c"></div>
+  </div>
+
+  <header class="topbar">
+    <a class="brand" href="#" data-page="hero" aria-label="abeam home">
+      <span class="logo-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="brand-name">abeam</span><span class="tagline">automate the chat hustle</span>
+    </a>
+    <nav id="nav-guest" class="nav" aria-label="Main navigation">
+      <a href="#pricing" data-page="pricing" data-scroll="#pricing">Pricing</a>
+      <a href="#features" data-page="features" data-scroll="#features">Features</a>
+      <a href="#faq" data-page="faq" data-scroll="#faq">FAQ</a>
+      <a href="#" id="btn-login">Login</a>
+    </nav>
+    <nav id="nav-authed" class="nav nav-authed" hidden aria-label="Account navigation">
+      <a href="#panel-bots" data-panel="bots">Dashboard</a>
+      <span class="nav-user"><span class="online-dot"></span><span id="nav-username">—</span></span>
+      <a href="#" id="btn-logout">Logout</a>
+    </nav>
+  </header>
+
+  <div id="err-banner" class="err-banner" hidden></div>
+
+  <main>
+    <section id="hero" class="hero section">
+      <div class="hero-inner">
+        <div class="kicker">Auto Beamer · the DM hustle on autopilot</div>
+        <h1>Run the 1v1 bracket.<br><span class="grad">Auto Beamer does the talking.</span></h1>
+        <p class="sub">Auto Beamer scans your lobby, queues up sword targets, DMs them a pitch, and walks the whole conversation to a Discord invite — automatically.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#pricing" data-page="pricing" data-scroll="#pricing">See plans</a>
+          <a class="btn btn-ghost" href="#" id="btn-hero-login">Get started</a>
+        </div>
+        <div class="hero-glyph" aria-hidden="true">
+          <span class="glyph glyph-radar">◉</span><span class="glyph-line"></span><span class="glyph glyph-chat">⌁</span><span class="glyph-line"></span><span class="glyph glyph-sword">╱</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="center"><div class="kicker">Built to grind your lobby</div><h2 class="section-title">The boring parts are automated.</h2><p class="sub">You set the angle. abeam handles the repetition.</p></div>
+      <div class="feature-grid">
+        <article class="feature"><span class="grad-icon">⌁</span><h3>Auto-scans the bracket</h3><p>abeam reads who's on the ladder and queues the fights worth taking — no more hunting names by hand.</p></article>
+        <article class="feature"><span class="grad-icon">◌</span><h3>Talks a full conversation</h3><p>A scripted opener, then a natural, in-character back-and-forth that walks the target where you want them.</p></article>
+        <article class="feature"><span class="grad-icon">✦</span><h3>AI rephrasing</h3><p>Beam AI rewrites every line fresh and human — no copy-paste tells. Runs on your credits.</p></article>
+        <article class="feature"><span class="grad-icon">⚙</span><h3>Edit every bot</h3><p>Persona, script, AI model, targeting and emoji style — tuned per slot, saved instantly.</p></article>
+      </div>
+    </section>
+
+    <section id="how" class="section panel">
+      <div class="center"><div class="kicker">Simple by design</div><h2>How it works</h2></div>
+      <ol class="steps">
+        <li><span class="step-num">1</span><p>Pick a plan and pay with LTC. Your dedicated slots spin up instantly.</p></li>
+        <li><span class="step-num">2</span><p>Give each bot a server and its Minecraft credentials. We host it for you.</p></li>
+        <li><span class="step-num">3</span><p>Watch every conversation live in per-bot consoles and tweak the script on the fly.</p></li>
+      </ol>
+    </section>
+
+    <section id="faq" class="section">
+      <div class="center"><div class="kicker">Questions, answered</div><h2 class="section-title">No mystery in the machine.</h2></div>
+      <details class="faq"><summary>Are there limits on targets I can hit?</summary><p>No. Every plan comes with unlimited targets — Scout, Hunter and Bracket King all include it. Pay for slots, not per-name.</p></details>
+      <details class="faq"><summary>Is there a free tier?</summary><p>No. abeam is a fully-managed paid service — a bot slot only starts once you have an active plan. That keeps every account honest.</p></details>
+      <details class="faq"><summary>Do I need to run anything on my PC?</summary><p>No. We host the bots. You just make the slots online from the dashboard and watch the consoles.</p></details>
+      <details class="faq"><summary>What do I need for Minecraft?</summary><p>An Xbox-authenticated Minecraft account. You paste its access token into a bot and the client signs in for you.</p></details>
+      <details class="faq"><summary>How do I pay?</summary><p>Lightning-free, private LTC. Every invoice gets a fresh receive address so your wallet stays separate.</p></details>
+    </section>
+
+    <section id="pricing" class="section panel pricing-section">
+      <div class="center"><div class="kicker">Pick your grind</div><h2>No target limits. No server limits.</h2><p class="sub">Pay for slots, spin up instantly.</p></div>
+      <div id="pricing-row" class="plan-row"><div class="loading">loading…</div></div>
+    </section>
+
+    <section id="app" hidden>
+      <div class="app-shell">
+        <aside class="sidebar">
+          <nav class="sidebar-nav">
+            <a class="sidebar-item active" href="#panel-bots" data-panel="bots"><span class="si-icon">◈</span><span class="si-label">Bots</span><span class="si-dot"></span></a>
+            <a class="sidebar-item" href="#panel-license" data-panel="license"><span class="si-icon">◇</span><span class="si-label">License</span><span class="si-dot" hidden></span></a>
+            <a class="sidebar-item" href="#panel-admin" data-panel="admin" hidden><span class="si-icon">⌘</span><span class="si-label">Admin</span><span class="si-dot" hidden></span></a>
+            <a class="sidebar-item" href="#panel-wallet" data-panel="wallet"><span class="si-icon">₤</span><span class="si-label">Wallet</span><span class="si-dot" hidden></span></a>
+            <a class="sidebar-item" href="#panel-licenses" data-panel="licenses"><span class="si-icon">▤</span><span class="si-label">Billing &amp; Keys</span><span class="si-dot" hidden></span></a>
+            <a class="sidebar-item" href="#panel-settings" data-panel="settings"><span class="si-icon">⚙</span><span class="si-label">Settings</span><span class="si-dot" hidden></span></a>
+          </nav>
+          <div class="sidebar-foot">
+            <div class="user-card"><div class="user-avatar" id="user-avatar">◉</div><div class="user-meta"><div class="user-line"><span class="user-name" id="nav-username-side">—</span><span id="badge-admin" class="badge-admin" hidden>admin</span></div><div class="user-sub" id="user-sub">discord</div></div></div>
+            <a class="btn btn-ghost sidebar-logout" href="#" id="btn-logout-side">↪ Logout</a>
+          </div>
+        </aside>
+
+        <div class="app-main">
+          <section id="panel-bots" class="panel-page">
+            <div class="panel-head"><div><h2>Bots</h2><p class="sub">Point each slot at a server, then connect its Minecraft account to go online.</p></div><span class="badge-admin soft">managed fleet</span></div>
+            <div class="fleet-actions"><button class="btn btn-ghost" id="btn-start-all">▶ Start all</button><button class="btn btn-ghost" id="btn-stop-all">■ Stop all</button><button class="btn btn-primary" id="btn-create-bot">＋ Create bot</button></div>
+            <div class="stat-row"><div class="stat"><span class="stat-label">Plan</span><strong class="stat-value" id="stat-plan">—</strong></div><div class="stat"><span class="stat-label">Bot slots</span><strong class="stat-value" id="stat-slots">—</strong></div><div class="stat"><span class="stat-label">Servers</span><strong class="stat-value" id="stat-servers">—</strong></div><div class="stat"><span class="stat-label">Targets engaged</span><strong class="stat-value" id="stat-targets">0</strong></div></div>
+            <div id="bot-lock" class="notice notice-warn" hidden>🔒 No active license. Pick a plan to unlock your managed fleet.</div>
+            <ul id="bot-list" class="slot-list"></ul>
+            <div id="console-wrap" class="console" hidden><div class="console-head"><span class="rec"><i></i> live</span><span id="console-title" class="console-title">bot console</span><div id="console-tabs" class="console-tabs"></div><button class="icon-btn" id="console-close">×</button></div><div id="console-panes" class="console-body"></div><form id="console-form" class="console-input"><input id="console-message" placeholder="Send a chat message…"><button class="btn btn-primary">Send</button></form></div>
+          </section>
+
+          <section id="panel-license" class="panel-page" hidden>
+            <div class="panel-head"><div><h2>License</h2><p class="sub">Your active plan, what it unlocks, and how to change it.</p></div><span id="lic-badge" class="badge-admin soft">FREE</span></div>
+            <div class="license-card"><div class="license-top"><div><div id="lic-plan" class="license-plan">No license</div><div id="lic-status" class="license-sub muted">pick a plan to unlock your fleet</div></div></div><div class="license-stats"><div class="lstat"><span id="lic-slots" class="lstat-v">0</span><span class="lstat-l">bot slots</span></div><div class="lstat"><span id="lic-servers" class="lstat-v">0</span><span class="lstat-l">servers</span></div><div class="lstat"><span id="lic-targets" class="lstat-v">∞</span><span class="lstat-l">targets</span></div><div class="lstat"><span id="lic-since" class="lstat-v">—</span><span class="lstat-l">since</span></div></div></div>
+            <div class="credits-card glass"><div class="panel-head"><div><h3 class="mini-head">Beam AI credits</h3><p class="muted">AI rephrasing spend for your fleet.</p></div><button class="btn btn-ghost" id="btn-buy-credits">Buy credits</button></div><div id="credits-balance" class="credits-balance">—</div></div>
+            <div class="change-plan"><h3 class="mini-head">Change / upgrade</h3><p class="muted">Switch licenses anytime — a new invoice is created per plan.</p><div id="lic-plans" class="plan-row"></div></div>
+          </section>
+
+          <section id="panel-licenses" class="panel-page" hidden><div class="panel-head"><div><h2>Billing &amp; Keys</h2><p class="sub">Your plan, invoices and license keys.</p></div></div><div id="redeem-box" class="redeem-box glass"><label for="redeem-input">Redeem a license key</label><div class="token-row"><input id="redeem-input" placeholder="ABEAM-… or abeam-key-…"><button id="btn-redeem" class="btn btn-primary">Redeem</button></div><div id="redeem-msg" class="muted hint">Your redeemed keys become active license plans on this account.</div></div><div id="licenses-list" class="license-grid">loading…</div></section>
+
+          <section id="panel-admin" class="panel-page" hidden><div class="panel-head"><div><h2>Admin</h2><p class="sub">Operator console for the whole fleet.</p></div><span class="grad-icon">₤</span></div><div class="admin-grid"><div class="admin-stat"><span>Revenue from confirmed invoices</span><strong id="admin-revenue">loading…</strong></div><div class="admin-stat"><span>Users</span><strong id="admin-users-count">—</strong></div><div class="admin-stat"><span>Active bots</span><strong id="admin-bots-count">—</strong></div></div><div class="admin-block"><h3 class="mini-head">Generate license keys</h3><div class="admin-form-row"><select id="admin-plan"><option value="ace">Ace — $5</option><option value="raid">Raid — $8</option><option value="storm">Storm — $16</option></select><select id="admin-months"><option value="1">1 month</option><option value="3">3 months</option><option value="6">6 months</option><option value="12">12 months</option></select><button class="btn btn-primary" id="admin-generate">Generate</button></div><pre id="admin-key-output" class="key-output" hidden></pre></div><div class="admin-block"><h3 class="mini-head">Users</h3><div id="admin-users" class="admin-list">loading…</div></div></section>
+
+          <section id="panel-wallet" class="panel-page" hidden><div class="panel-head"><div><h2>Owner Wallet</h2><p class="sub">All paid invoices sweep here. Receive, check balance, and send LTC out.</p></div><button class="btn btn-ghost" id="wallet-refresh">↻ Refresh</button></div><div class="wallet-card"><div class="wallet-kicker">LIVE · LTC PRICE</div><div class="wallet-balance" id="wallet-balance">$0.00</div><div class="wallet-address"><span class="muted">Receive address</span><code id="wallet-address">loading…</code></div></div><div class="admin-block"><h3 class="mini-head">Transactions</h3><div id="wallet-txs" class="admin-list">loading…</div></div></section>
+
+          <section id="panel-settings" class="panel-page" hidden><div class="panel-head"><div><h2>Settings</h2><p class="sub">Your account and backend access token.</p></div></div><div class="settings-grid"><div class="settings-card"><h3 class="mini-head">Your backend access token (SSID)</h3><div class="token-row"><code id="ssid-display">—</code><button class="btn btn-ghost" id="btn-copy">Copy</button></div><p class="hint">The managed bot passes this to the backend automatically. Keep it secret.</p></div><div class="settings-card"><h3 class="mini-head">Signed in as</h3><p id="settings-email" class="settings-value">—</p><p id="settings-provider" class="muted">discord account</p></div></div><div class="settings-card appearance"><h3 class="mini-head">Appearance</h3><p class="muted">Choose an accent color. Your choice is saved on this device.</p><div class="theme-grid"><button class="theme-swatch" data-theme="green"><i style="--c:#22c55e"></i>Green</button><button class="theme-swatch" data-theme="orange"><i style="--c:#f97316"></i>Orange</button><button class="theme-swatch" data-theme="purple"><i style="--c:#a78bfa"></i>Purple</button><button class="theme-swatch" data-theme="blue"><i style="--c:#38bdf8"></i>Blue</button><button class="theme-swatch" data-theme="red"><i style="--c:#f87171"></i>Red</button><button class="theme-swatch" data-theme="pink"><i style="--c:#f472b6"></i>Pink</button></div></div><div class="settings-card toggles"><label class="toggle-row"><input id="sound-toggle" type="checkbox" checked><span>Enable click sounds</span><small>Soft UI clicks when you press buttons.</small></label><label class="toggle-row"><input id="motion-toggle" type="checkbox"><span>Disable animations &amp; visual effects</span><small>Kills glows, blur, logo motion, and transitions.</small></label></div></section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">abeam · grind the 1v1 bracket</footer>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <div id="loginmodal" class="modal-overlay" hidden><div class="modal auth-modal"><button class="modal-close" id="login-close">×</button><h3 id="login-title">Sign in</h3><p class="sub">Pick an account. Discord logs you in with one tap, or use email + password.</p><div class="auth-tabs"><button class="auth-tab active" data-mode="login">Sign in</button><button class="auth-tab" data-mode="signup">Create account</button></div><form id="auth-form"><label for="auth-email">Email</label><input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com"><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="current-password" required minlength="6" placeholder="••••••••"><p id="auth-err" class="auth-err" hidden></p><button id="auth-submit" class="btn btn-primary auth-submit" type="submit">› sign in</button></form><div class="auth-or">or</div><button id="login-discord" class="btn discord-btn" type="button">Continue with Discord</button></div></div>
+
+  <div id="checkout" class="modal-overlay" hidden><div class="modal checkout-modal"><div class="checkout-header"><div><h3>Checkout</h3><p class="sub">Complete your license order</p></div><button class="modal-close" id="checkout-close">×</button></div><div class="checkout-plan-card"><div class="checkout-plan-top"><div class="checkout-plan-icon">⛏</div><div><strong id="checkout-plan">—</strong><div class="muted">Everything included</div></div></div><div class="checkout-plan-divider"></div><div class="checkout-plan-bottom"><span class="muted">Total</span><div class="checkout-total-right"><strong id="checkout-usd">—</strong><div id="checkout-ltc" class="checkout-total-ltc">— LTC</div></div></div></div><div class="checkout-pay"><label class="checkout-field-label">Send exactly (LTC)</label><div class="checkout-field-row"><div class="checkout-field-ltc">Ł <span id="checkout-ltc-amount">—</span></div><button id="checkout-copy-ltc" class="btn-copy">Copy</button></div><label class="checkout-field-label">To this address</label><div class="checkout-field-row"><div class="checkout-field-addr">◈ <span id="checkout-address" class="checkout-addr-text">—</span></div><button id="checkout-copy-addr" class="btn-copy">Copy</button></div></div><div id="checkout-status" class="checkout-status waiting"><span class="checkout-spinner"></span><span id="checkout-status-text">Waiting for payment…</span></div><div class="checkout-qr-wrap"><img id="checkout-qr-img" class="checkout-qr" alt="LTC payment QR"><span id="checkout-timer" class="checkout-timer">30m 00s</span></div><div class="checkout-actions"><button id="checkout-check" class="btn-check">Check payment</button><button id="checkout-cancel" class="btn-cancel-invoice">Cancel invoice</button></div></div></div>
+
+  <div id="slotmodal" class="modal-overlay" hidden><div class="modal bot-modal"><button class="modal-close" id="slotmodal-close">×</button><div class="addbot-header"><div class="addbot-icon">＋</div><div class="addbot-title-wrap"><h3 id="slotmodal-title">Add a bot</h3><p class="addbot-sub">Connect a Minecraft account to a server</p></div></div><div class="addbot-divider"></div><form id="slotmodal-form" class="addbot-body"><div class="cfg-header">Connection</div><label for="slot-name">Bot name <span class="hint">(optional)</span></label><input id="slot-name" placeholder="My farming bot"><div class="addbot-row"><div class="addbot-host"><label for="slot-server">Server IP / address</label><input id="slot-server" required placeholder="play.example.net"></div><div class="addbot-port"><label for="slot-port">Port</label><input id="slot-port" inputmode="numeric" value="25565" placeholder="25565"></div></div><label for="slot-version">Minecraft version</label><div class="addbot-select"><select id="slot-version"><option value="auto">Auto-detect</option><option>1.21.11</option><option>1.21.8</option><option>1.21.4</option><option>1.20.4</option><option>1.20.1</option><option>1.19.4</option><option>1.18.2</option><option>1.12.2</option><option>1.8.9</option></select></div><p class="hint">Azalea always uses the latest vanilla protocol. Use Mineflayer if you need to pin an older version.</p><label for="slot-proxy">SOCKS proxy <span class="hint">(optional)</span></label><input id="slot-proxy" placeholder="socks5://user:pass@host:1080"><div class="cfg-divider"></div><div class="cfg-header">Account</div><label for="slot-token">Minecraft token</label><textarea id="slot-token" rows="3" required placeholder="eyJraWQiOiJ…"></textarea><p class="hint">Your minecraft.net / Yggdrasil / bearer access token. Used to authenticate the session.</p><label for="slot-username">Minecraft username <span class="hint">(optional)</span></label><input id="slot-username" placeholder="Resolved from token when available"><label for="slot-discord">Discord Username <span class="hint">(for Beam AI)</span></label><input id="slot-discord" placeholder="stood014"><label for="slot-yt-channel">YouTube channel <span class="hint">(for Beam AI)</span></label><input id="slot-yt-channel" placeholder="Alight.z"><label for="slot-beam-ip">Server IP (Beam fallback)</label><input id="slot-beam-ip" placeholder="badlion-pvp.xyz"><div class="cfg-divider"></div><div class="cfg-header">Beam settings</div><label for="slot-beam-type">Beam type</label><div class="addbot-select"><select id="slot-beam-type"><option value="ai">AI Beaming (Player-to-Player)</option><option value="spam">Spam Beaming</option><option value="lobby">Lobby Anti-AFK (Trigger Word)</option></select></div><div id="beam-ai-fields" class="beam-fields"><label for="slot-opener">Opener script <span class="hint">(optional)</span></label><textarea id="slot-opener" rows="4" placeholder="yo\ncan you help me ?\ncause I am in a 2v2 event and I need a teamate ;["></textarea><p class="hint">One message per line, up to five. Leave empty to use the built-in defaults.</p></div><div id="beam-spam-fields" class="beam-fields" hidden><label for="slot-spam-message">Spam / lobby message</label><input id="slot-spam-message" placeholder="type 123 in chat for tier test all mode"><label for="slot-spam-interval">Send interval (milliseconds)</label><input id="slot-spam-interval" inputmode="numeric" value="60000" placeholder="60000"><label for="slot-trigger">Trigger word</label><input id="slot-trigger" placeholder="123"><label for="slot-reply">Reply message</label><input id="slot-reply" placeholder="add my discord stood014 to join"><p class="hint">When the trigger is said in chat, the bot sends the reply through a private message.</p></div><div class="cfg-divider"></div><div class="cfg-header">Bot engine</div><div class="engine-grid"><label class="engine-option selected"><input type="radio" name="engine" value="azalea" checked><span><b>Azalea (Rust)</b><small>Vanilla-like physics. Latest MC protocol.</small></span></label><label class="engine-option"><input type="radio" name="engine" value="mineflayer"><span><b>Mineflayer</b><small>Explicit Node fallback for pinned versions.</small></span></label><label class="engine-option"><input type="radio" name="engine" value="nmp"><span><b>Raw NMP</b><small>Compatibility option; uses the Abeam client path.</small></span></label></div><label class="check-row"><input id="slot-ai" type="checkbox" checked><span><b>Enable AI rephrasing</b><small>Rewrites outgoing lines in a natural, human voice.</small></span></label><label class="check-row"><input id="slot-logging" type="checkbox"><span><b>Enable Beam Logging</b><small>Post match alerts to a Discord webhook.</small></span></label><label for="slot-webhook">Discord webhook URL <span class="hint">(optional)</span></label><input id="slot-webhook" placeholder="https://discord.com/api/webhooks/…"><p id="slot-error" class="auth-err" hidden></p><div class="addbot-actions"><button type="button" class="btn btn-ghost" id="slotmodal-cancel">Cancel</button><button type="submit" class="btn btn-primary" id="slot-submit">Create &amp; connect</button></div></form></div></div>
+
+  <div id="inventorymodal" class="modal-overlay" hidden><div class="modal inventory-modal"><button class="modal-close" id="inventory-close">×</button><h3 id="inventory-title">Inventory</h3><p id="inventory-status" class="sub">View the live hotbar and open GUI.</p><div id="inventory-grid" class="inv-grid"></div><div id="inventory-window" class="inventory-window" hidden><div class="cfg-header">Open GUI</div><div id="inventory-window-grid" class="inv-grid"></div></div><div class="modal-actions"><button class="btn btn-ghost" id="inventory-refresh">↻ Refresh</button><button class="btn btn-primary" id="inventory-done">Done</button></div></div></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

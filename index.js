@@ -2,7 +2,6 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import next from 'next';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { config } from './config.js';
@@ -78,18 +77,9 @@ import {
 } from './bots/manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, 'public');
 const app = express();
 const server = http.createServer(app);
-
-// The reference mc-bot-manager UI is rendered by Next while this Express
-// process continues to own the API, Azalea bridge, and websocket endpoints.
-// Keeping both behind one listener means browser requests stay same-origin on
-// Railway and the UI can use its original /api/* calls unchanged.
-const nextApp = next({
-  dev: config.env !== 'production',
-  dir: __dirname,
-});
-const nextHandler = nextApp.getRequestHandler();
 
 function isAdmin(user) {
   return isAdminUser(user);
@@ -98,7 +88,14 @@ function isAdmin(user) {
 app.use(cors({ origin: config.appUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
+app.use(express.static(PUBLIC_DIR));
 app.set('trust proxy', 1);
+
+// The original abeam landing page and operator dashboard are served by the
+// same Express process as the API. `/dashboard` remains a convenient alias.
+app.get(['/', '/dashboard', '/dashboard/'], (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
 
 // Railway and uptime monitors use this endpoint; it intentionally does not
 // touch billing, Minecraft services, or the JSON store.
@@ -1748,20 +1745,6 @@ function expireAndSync() {
 }
 expireAndSync();
 setInterval(expireAndSync, 10 * 60 * 1000);
-
-// Let Next render the reference dashboard after every Express API route has
-// had a chance to handle the request. `/dashboard` is an alias for `/` so
-// existing bookmarks keep the same UI too.
-await nextApp.prepare();
-app.get('/dashboard', (req, res) => {
-  req.url = '/';
-  return nextHandler(req, res);
-});
-app.get('/dashboard/', (req, res) => {
-  req.url = '/';
-  return nextHandler(req, res);
-});
-app.get('*', (req, res) => nextHandler(req, res));
 
 server.listen(config.port, '0.0.0.0', () => {
   console.log(`[abeam] dashboard + api listening on http://0.0.0.0:${config.port}`);

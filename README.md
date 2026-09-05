@@ -20,13 +20,15 @@ server:
   responses.
 
 The manager uses `azalea` by default. `mineflayer` remains available only
-when an operator explicitly sends `"engine": "mineflayer"`. The dashboard is
-the original `mc-bot-manager` App Router UI (the reference `src/app` components,
-styles, layout, login flow, bot cards, console/game view, license, shop, admin,
-training, and settings panels) and is served at both `/` and `/dashboard`.
-Only its API calls are backed by this Express/Azalea service. The older
-`/api/slots` path remains available for the repository's external
-`abeam.exe`/WebSocket workflow.
+when an operator explicitly sends `"engine": "mineflayer"`. The browser UI is
+abeam's Auto Beamer landing page and operator dashboard: the Catppuccin-style
+hero, feature/workflow/FAQ sections, Ace/Raid/Storm pricing, sidebar sections,
+license/billing/settings screens, and live bot cards are served as same-origin
+static assets from `public/`. The create-bot modal borrows the complete
+connection fields and status/card patterns from `mc-bot-manager`, while every
+write is backed by this Express/Azalea service. It is served at both `/` and
+`/dashboard`. The older `/api/slots` path remains available for the repository's
+external `abeam.exe`/WebSocket workflow.
 
 ## Bot API
 
@@ -99,8 +101,10 @@ npm run dev
 # health:    http://localhost:8080/healthz
 ```
 
-`npm run build` compiles the reference Next.js UI. `npm start` runs the
-production Next/Express server after that build.
+`npm run build` performs the JavaScript syntax checks used by the container.
+The landing page and dashboard are static files in `public/`; `npm start` runs
+one Express process that serves those assets, the API, WebSocket endpoints,
+and the Azalea runtime.
 
 The JSON files in `data/` are the development datastore. Do not run more than
 one application replica against the same JSON files. For production, mount a
@@ -109,11 +113,12 @@ Railway volume at `/app/data`.
 ## Railway deployment
 
 The repository includes `Dockerfile`, `railway.json`, and a `/healthz`
-healthcheck. The Dockerfile first compiles the Azalea Rust sidecar, builds the
-reference Next.js dashboard, and then packages both with the Node API. The
-first Railway build can take roughly 10–20 minutes. No Postgres service is required by this version because the
-existing application uses its JSON store; a persistent volume is required if
-accounts, invoices, sessions, and bot definitions must survive deploys.
+healthcheck. The Dockerfile first compiles the Azalea Rust sidecar and then
+packages the static abeam dashboard with the Node API. The first Railway build
+can take roughly 10–20 minutes. No Postgres service is required by this
+version because the existing application uses its JSON store; a persistent
+volume is required if accounts, invoices, sessions, and bot definitions must
+survive deploys.
 
 1. Push or keep this repository on the `arena/01a070c3-abeam` branch.
 2. In Railway, choose **New Project → Deploy from GitHub repo**, select the
@@ -127,7 +132,7 @@ accounts, invoices, sessions, and bot definitions must survive deploys.
    Keep one web replica. Azalea sidecar processes and their runtime state are
    process-local.
 4. Deploy. Railway detects the `Dockerfile`; the container first compiles the
-   Azalea Rust client, then runs `npm start`.
+   Azalea Rust client, copies the abeam `public/` UI, then runs `npm start`.
    Wait for `/healthz` to pass, then use **Settings → Networking → Generate
    Domain**.
 5. Add these service variables before using production accounts:
