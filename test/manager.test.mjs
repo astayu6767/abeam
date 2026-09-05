@@ -21,6 +21,7 @@ assert.equal(countBots(email), 1);
 
 const listed = listBots(email)[0];
 assert.equal(listed.hasToken, true);
+assert.equal(listed.engine, 'azalea');
 assert.equal('token' in listed, false, 'raw Minecraft token must not be returned');
 assert.equal(listed.status, 'offline');
 assert.equal(getViewSnapshot(created.id).available, false);

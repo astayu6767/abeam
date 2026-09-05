@@ -1,17 +1,40 @@
 # syntax=docker/dockerfile:1
-# Self-contained abeam API + Mineflayer bot runtime for Railway.
-FROM node:22-bookworm-slim
+# Abeam API + Azalea Rust Minecraft client for Railway.
+# The first build is intentionally slower because Cargo compiles Azalea.
 
+FROM rust:bookworm AS azalea
+WORKDIR /src
+ENV CARGO_TERM_COLOR=always \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    CARGO_BUILD_JOBS=2 \
+    RUSTUP_TOOLCHAIN=nightly-2026-07-02
+RUN rustup toolchain install nightly-2026-07-02 --profile minimal
+
+# Cache the dependency build before copying the frequently-changing Rust source.
+COPY azalea-bridge/rust-toolchain.toml azalea-bridge/Cargo.toml ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs \
+    && cargo +nightly-2026-07-02 build --release || true
+COPY azalea-bridge/src ./src
+RUN touch src/main.rs \
+    && cargo +nightly-2026-07-02 build --release \
+    && cp target/release/azalea-bridge /azalea-bridge
+
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-
 COPY . .
+COPY --from=azalea /azalea-bridge /usr/local/bin/azalea-bridge
+RUN chmod +x /usr/local/bin/azalea-bridge
 
-# Railway injects PORT at runtime. The application defaults to 8080 locally.
+# Railway injects PORT at runtime. The app defaults to 8080 locally.
 EXPOSE 8080
 VOLUME ["/app/data"]
 

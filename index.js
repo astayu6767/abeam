@@ -300,12 +300,13 @@ function stopBotsFor(email) {
 }
 
 // ---------------------------------------------------------------
-// Created bot API (Mineflayer runtime)
+// Created bot API (Azalea runtime)
 // ---------------------------------------------------------------
 // This is the backend equivalent of mc-bot-manager's /api/bots routes. It is
 // deliberately separate from /api/slots, which controls the legacy external
-// abeam executable. A bot belongs to the signed-in account and its Minecraft
-// bearer token is accepted on write but never returned in JSON.
+// abeam executable. Created bots run through the compiled Azalea sidecar; a
+// bot belongs to the signed-in account and its Minecraft bearer token is
+// accepted on write but never returned in JSON.
 function requireBotUser(req, res, next) {
   return requireWeb(req, res, next);
 }

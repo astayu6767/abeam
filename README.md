@@ -10,7 +10,8 @@ server:
 
 - a bot definition is persisted in `data/bots.json`;
 - a runtime is kept in memory and resumed when `enabled`;
-- Mineflayer connects using the supplied Minecraft bearer/access token;
+- the default engine is the linked project's Azalea Rust client, compiled from
+  `azalea-bridge/` and launched as a JSON-lines sidecar;
 - status, logs, console chat, inventory actions, movement, view snapshots, and
   Beam conversations are exposed through API routes;
 - bot records are scoped to the signed-in account and bot creation is limited
@@ -18,9 +19,10 @@ server:
 - tokens are accepted on create/update but are never included in API JSON
   responses.
 
-The manager currently uses the `mineflayer` engine. The older `/api/slots`
-path remains available for the repository's external `abeam.exe`/WebSocket
-workflow.
+The manager uses `azalea` by default. `mineflayer` remains available only
+when an operator explicitly sends `"engine": "mineflayer"`. The older
+`/api/slots` path remains available for the repository's external
+`abeam.exe`/WebSocket workflow.
 
 ## Bot API
 
@@ -59,6 +61,7 @@ curl -X POST "$APP_URL/api/bots" \
     "host": "play.example.net",
     "port": 25565,
     "version": "auto",
+    "engine": "azalea",
     "proxy": "socks5://user:pass@proxy.example.net:1080",
     "antiAfk": true,
     "antiAfkInterval": 120
@@ -98,7 +101,9 @@ Railway volume at `/app/data`.
 ## Railway deployment
 
 The repository includes `Dockerfile`, `railway.json`, and a `/healthz`
-healthcheck. No Postgres service is required by this version because the
+healthcheck. The Dockerfile first compiles the Azalea Rust sidecar and then
+packages it with the Node API. The first Railway build can take roughly
+10–20 minutes. No Postgres service is required by this version because the
 existing application uses its JSON store; a persistent volume is required if
 accounts, invoices, sessions, and bot definitions must survive deploys.
 
@@ -111,8 +116,10 @@ accounts, invoices, sessions, and bot definitions must survive deploys.
    /app/data
    ```
 
-   Keep one web replica. Mineflayer bot connections are process-local.
-4. Deploy. Railway detects the `Dockerfile`; the container runs `npm start`.
+   Keep one web replica. Azalea sidecar processes and their runtime state are
+   process-local.
+4. Deploy. Railway detects the `Dockerfile`; the container first compiles the
+   Azalea Rust client, then runs `npm start`.
    Wait for `/healthz` to pass, then use **Settings → Networking → Generate
    Domain**.
 5. Add these service variables before using production accounts:
@@ -151,7 +158,10 @@ accounts, invoices, sessions, and bot definitions must survive deploys.
   demo account in Railway.
 - A Minecraft access token can expire. Update it through `PATCH /api/bots/:id`
   rather than putting it in a dashboard response or log.
-- The linked `mc-bot-manager` branch compiles an Azalea Rust sidecar. This
-  adaptation intentionally uses Mineflayer so this backend deploys with the
-  regular Node Docker image; the existing legacy executable path is still
-  available when an Azalea/abeam binary is supplied separately.
+- The linked `mc-bot-manager` Azalea sidecar is now included under
+  `azalea-bridge/` and is the default `/api/bots` engine. It speaks the
+  same JSON-lines start/chat/movement/inventory protocol used by the reference
+  manager.
+- If you explicitly select `engine: "mineflayer"`, the Node fallback is used
+  instead. The legacy external executable path is separate and remains
+  available through `/api/slots`.

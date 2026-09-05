@@ -6,20 +6,20 @@ import { buildBotConfig } from '../billing/subscribers.js';
 import { consumeAiCredit } from '../billing/credits.js';
 import { newConversation, step, rephraseScriptedLine } from '../conversation/index.js';
 import { postMatchStart } from '../webhook/index.js';
+import { startAzaleaBot, stopAzaleaBot } from './azalea.js';
 
 /**
  * Bot manager for bots created through the HTTP API.
  *
  * This follows the useful part of mc-bot-manager's botManager: a bot is a
  * persisted record plus an in-memory runtime. The record survives a restart;
- * the runtime owns the Mineflayer connection, logs, beam conversations and
+ * the runtime owns the Azalea sidecar connection, logs, beam conversations and
  * control actions. Minecraft access tokens never leave this module in API
- * responses.
+ * responses. Mineflayer remains available only as an optional local fallback.
  *
  * The older `/api/slots` API in this repository still manages the external
  * abeam executable through bots/supervisor.js. These APIs are the self-contained
- * create/start/stop APIs and use Mineflayer so they can run on Railway without
- * a locally-installed executable.
+ * create/start/stop APIs and default to the compiled Azalea Rust client.
  */
 
 const MAX_LOGS = 300;
@@ -108,6 +108,14 @@ function runtimeFor(id) {
       reconnectTimer: null,
       reconnectAttempts: 0,
       antiAfkTimer: null,
+      azaleaChild: null,
+      azaleaSnap: null,
+      azaleaHbWatcher: null,
+      azaleaHbAt: 0,
+      azaleaHbTickAgeS: null,
+      azaleaHbOnline: false,
+      azaleaRespawn: false,
+      azaleaLastRestart: 0,
       beamTimer: null,
       beamBusy: false,
       beamEnabled: false,
@@ -156,7 +164,7 @@ function publicBot(record) {
     ytChannel: record.ytChannel,
     beamIp: record.beamIp,
     discordUser: record.discordUser,
-    engine: record.engine || 'mineflayer',
+    engine: record.engine || 'azalea',
     beamType: record.beamType || 'ai',
     spamMessage: record.spamMessage,
     spamInterval: record.spamInterval,
@@ -216,9 +224,9 @@ function normalizeBotInput(input = {}, existing = {}) {
     throw new Error('a valid Minecraft server address is required');
   }
 
-  const engine = input.engine ?? existing.engine ?? 'mineflayer';
-  if (engine !== 'mineflayer') {
-    throw new Error('this API currently supports the mineflayer engine; use engine: "mineflayer"');
+  const engine = input.engine ?? existing.engine ?? 'azalea';
+  if (!['azalea', 'mineflayer'].includes(engine)) {
+    throw new Error('engine must be "azalea" or "mineflayer"');
   }
 
   const token = input.token !== undefined
@@ -236,7 +244,9 @@ function normalizeBotInput(input = {}, existing = {}) {
     ytChannel: clampText(input.ytChannel !== undefined ? input.ytChannel : existing.ytChannel, 128, 'Alight.z') || 'Alight.z',
     beamIp: clampText(input.beamIp !== undefined ? input.beamIp : existing.beamIp, 253, 'badlion-pvp.xyz') || 'badlion-pvp.xyz',
     discordUser: clampText(input.discordUser !== undefined ? input.discordUser : existing.discordUser, 128, 'stood014') || 'stood014',
-    engine: 'mineflayer',
+    engine,
+    // Azalea is the production/default engine. Mineflayer is retained for
+    // local compatibility when explicitly requested by an operator.
     beamType: ['ai', 'spam', 'lobby'].includes(input.beamType ?? existing.beamType)
       ? (input.beamType ?? existing.beamType)
       : 'ai',
@@ -336,6 +346,7 @@ async function stopRuntime(runtime, persist = true) {
   clearTimer(runtime, 'connectionTimeout');
   clearTimer(runtime, 'reconnectTimer');
 
+  stopAzaleaBot(runtime);
   const bot = runtime.bot;
   runtime.bot = null;
   runtime.joined = false;
@@ -356,7 +367,24 @@ async function stopRuntime(runtime, persist = true) {
   if (persist) persistStatus(runtime.id, 'offline');
 }
 
+function profileFromTokenPayload(token) {
+  try {
+    const parts = String(token).split('.');
+    if (parts.length < 2) return null;
+    const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    const profile = Array.isArray(payload.pfd) ? payload.pfd.find((entry) => entry?.type === 'mc') : null;
+    if (profile?.id && profile?.name) {
+      return { id: String(profile.id).replace(/-/g, ''), name: String(profile.name) };
+    }
+  } catch {
+    // Fall back to the Minecraft profile endpoint below.
+  }
+  return null;
+}
+
 async function resolveProfile(token) {
+  const embedded = profileFromTokenPayload(token);
+  if (embedded) return embedded;
   const result = await validateMinecraftToken(token);
   if (!result.ok) {
     throw new Error(result.message || result.reason || 'Minecraft token validation failed');
@@ -567,6 +595,103 @@ function handleIncomingChat(runtime, username, message) {
   const conversation = beginConversation(runtime, target);
   if (!conversation) return;
   void deliverConversation(runtime, conversation, step(conversation, text));
+}
+
+function parseAzaleaChatLine(line) {
+  const text = clampText(line, 1000);
+  let match = text.match(/^<([A-Za-z0-9_]{3,16})>\s*(.+)$/);
+  if (match) return { username: match[1], message: match[2] };
+  match = text.match(/^\(From\s+([A-Za-z0-9_]{3,16})\)\s*(.+)$/i);
+  if (match) return { username: match[1], message: match[2] };
+  match = text.match(/^([A-Za-z0-9_]{3,16})\s*(?:whispers?(?:\s+to\s+you)?|:)\s*(.+)$/i);
+  if (match) return { username: match[1], message: match[2] };
+  return null;
+}
+
+function handleIncomingAzaleaLine(runtime, line) {
+  const parsed = parseAzaleaChatLine(line);
+  if (parsed) handleIncomingChat(runtime, parsed.username, parsed.message);
+}
+
+function attachAzalea(runtime, record, profile) {
+  runtime.profile = profile;
+  runtime.azaleaSnap = null;
+  const timeout = setTimeout(() => {
+    if (!runtime.joined && runtime.status === 'connecting') {
+      const message = 'Azalea connection timed out (server did not respond in 45s)';
+      setStatus(runtime, 'error', message);
+      log(runtime, 'error', message);
+      try { runtime.bot?.quit(); } catch {}
+    }
+  }, Number(config.botConnectionTimeoutMs || 45_000));
+  runtime.connectionTimeout = timeout;
+
+  const clearConnectTimeout = () => {
+    if (runtime.connectionTimeout === timeout) {
+      clearTimeout(timeout);
+      runtime.connectionTimeout = null;
+    }
+  };
+
+  void startAzaleaBot(record, runtime, {
+    onStarted: (_handle, binary) => {
+      log(runtime, 'system', `starting Azalea sidecar (${binary})`);
+    },
+    onLog: (level, line) => log(runtime, level, line),
+    onStatus: (status, handle) => {
+      if (status !== 'online') return;
+      clearConnectTimeout();
+      runtime.bot = handle;
+      runtime.joined = true;
+      runtime.status = 'online';
+      runtime.lastError = null;
+      runtime.reconnectAttempts = 0;
+      persistStatus(record.id, 'online', null, { username: profile.name, uuid: profile.id });
+      log(runtime, 'system', `Azalea joined ${record.host}:${record.port}`);
+    },
+    onChat: (line) => handleIncomingAzaleaLine(runtime, line),
+    onSnapshot: (snapshot) => {
+      runtime.azaleaSnap = snapshot;
+    },
+    onPlayerAdded: (name) => log(runtime, 'system', `${name} joined`),
+    onPlayerRemoved: (name) => log(runtime, 'system', `${name} left`),
+    onError: (message) => {
+      if (!runtime.manualStop) {
+        runtime.lastError = clampText(message, 1000);
+        log(runtime, 'error', message);
+        setStatus(runtime, 'error', message);
+      }
+    },
+    onEnd: (reason) => {
+      clearConnectTimeout();
+      stopAntiAfk(runtime);
+      runtime.joined = false;
+      runtime.azaleaSnap = null;
+      if (runtime.bot?.child && runtime.azaleaChild === null) runtime.bot = null;
+      if (runtime.manualStop) {
+        runtime.status = 'offline';
+        runtime.lastError = null;
+        persistStatus(record.id, 'offline');
+        return;
+      }
+      const status = runtime.status === 'error' ? 'error' : 'offline';
+      setStatus(runtime, status, status === 'error' ? runtime.lastError : null);
+      log(runtime, status === 'error' ? 'error' : 'system', `Azalea disconnected: ${reason}`);
+      scheduleReconnect(runtime);
+    },
+  }).then((started) => {
+    if (!started && runtime.connectionTimeout === timeout) {
+      clearTimeout(timeout);
+      runtime.connectionTimeout = null;
+    }
+  }).catch((error) => {
+    if (runtime.connectionTimeout === timeout) {
+      clearTimeout(timeout);
+      runtime.connectionTimeout = null;
+    }
+    setStatus(runtime, 'error', error?.message || String(error));
+    log(runtime, 'error', error?.message || String(error));
+  });
 }
 
 function scheduleReconnect(runtime) {
@@ -829,6 +954,12 @@ export async function startBot(id) {
     return;
   }
 
+  const runnableRecord = { ...record, username: profile.name, uuid: profile.id };
+  if ((record.engine || 'azalea') === 'azalea') {
+    attachAzalea(runtime, runnableRecord, profile);
+    return;
+  }
+
   let profileKeys = null;
   try {
     profileKeys = await fetchProfileKeys(record.token);
@@ -837,7 +968,7 @@ export async function startBot(id) {
     log(runtime, 'system', 'secure-chat certificates unavailable; continuing without them');
   }
 
-  await startMineflayer(runtime, { ...record, username: profile.name, uuid: profile.id }, profile, profileKeys);
+  await startMineflayer(runtime, runnableRecord, profile, profileKeys);
 }
 
 /** Stop a bot without deleting its configuration. */
@@ -1030,6 +1161,21 @@ export function getViewSnapshot(id) {
   const runtime = runtimes.get(id);
   const bot = runtime?.bot;
   if (!bot || runtime?.status !== 'online') return { available: false };
+  if (runtime.azaleaSnap) {
+    const players = Object.values(bot.players || {}).map((player) => ({
+      username: player.username,
+      position: player.entity?.position
+        ? { x: player.entity.position.x, y: player.entity.position.y, z: player.entity.position.z }
+        : null,
+    }));
+    return {
+      ...runtime.azaleaSnap,
+      available: true,
+      username: runtime.azaleaSnap.username || bot.username || runtime.profile?.name || null,
+      players,
+      window: runtime.azaleaSnap.window || null,
+    };
+  }
   const position = bot.entity?.position;
   const hotbar = Array.from({ length: 9 }, (_, slot) => itemView(bot.inventory?.slots?.[36 + slot], slot, bot.quickBarSlot === slot));
   const players = Object.values(bot.players || {}).map((player) => ({
